@@ -1,0 +1,22 @@
+name = "knock-aru"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "knock-aru"
+database_id = "填 wrangler d1 create 给的 id"
+
+[ai]
+binding = "AI"   # 小模型用 Cloudflare 的 Workers AI；不开小模型可以删掉这两行
+
+[triggers]
+crons = ["*/30 * * * *"]   # 每 30 分钟：清旧记录；开了小模型的话白天让它看一眼
+
+# 口令和凭证用 wrangler secret put 放，别写在这里：
+#   EVENT_TOKEN   快捷指令用的口令
+#   ADMIN_TOKEN   改叫醒说明、看时间线用的口令
+#   WAKE_BUNDLE   Aru 外部触发的发送凭证（整段 JSON），没有就不填
+#   PUSH_URL      没接 Aru 时先用推送，比如 https://ntfy.sh/你自己起的长名字
+#   LLM_URL       （可选）小模型不用 Workers AI、改用别家时：OpenAI 兼容的 chat/completions 地址
+#   LLM_KEY       （可选）那家的钥匙

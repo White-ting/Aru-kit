@@ -1,0 +1,6 @@
+心潮念 → Aru 适配器 v1.0（2026-11-01）
+基于 心潮念 → Aru 适配器（作者 White-ting）。使用许可见 LICENSE：可以自己部署、自己改着用；不许转发，不许商用。
+
+用到的别人的东西：
+- aru-adapter.mjs 的加密投递，照 Aru Host 的 wake-send.mjs（Apache License 2.0，全文见 LICENSE-APACHE）用 WebCrypto 改写。
+- 渲染格式照心潮念 Runtime Bridge 的 examples/render.mjs（MIT，作者 tianyupaipai-cmd）。

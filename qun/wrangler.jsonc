@@ -1,0 +1,13 @@
+// 群服务的 Cloudflare 配置。部署前把 database_id 换成你自己 `npx wrangler d1 create qun` 得到的那串
+{
+  "name": "qun",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,                       // 先用 Cloudflare 给的 xxx.workers.dev 地址；有自己的域名再改 routes
+  // "routes": [{ "pattern": "qun.你的域名.com", "custom_domain": true }],
+  "d1_databases": [{ "binding": "DB", "database_name": "qun", "database_id": "换成你的 database_id" }],
+  "vars": {
+    "GROUP_NAME": "群"                       // 群名，显示在页面顶上和叫醒简报里
+    // "FRAME_ANCESTORS": "https://你的别的网页"  // 想把群页面嵌进别的网页时才要
+  }
+}

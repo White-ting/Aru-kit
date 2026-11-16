@@ -1,0 +1,6 @@
+群服务（qun）v1.1（2026-11-01）
+基于 群服务 qun（作者 White-ting）。使用许可见 LICENSE：可以自己部署、自己改着用；不许转发，不许商用。
+
+用到的别人的东西：
+- src/seal.js 里的加密投递，照 Aru Host 的 wake-send.mjs（Apache License 2.0，全文见 LICENSE-APACHE）用 WebCrypto 重写，
+  信封格式（aru.wake-bridge.payload.v2 / sealed-event.v1）以 Aru 官方文档为准。

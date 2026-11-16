@@ -1,0 +1,8 @@
+knock
+基于 knock 守门人（作者 White-ting）。使用许可见 LICENSE。
+
+aru/worker/src/seal.js is a WebCrypto rewrite of wake-send.mjs from aru-host
+(https://github.com/Aevella/aru-host), which is licensed under the Apache License, Version 2.0 (see LICENSE-APACHE).
+The sealed-event and payload formats (aru.wake-bridge.*) follow aru-host's wake-bridge specification.
+
+Aru and Aru Host are projects of their respective authors; knock is an independent project and is not affiliated with them.
