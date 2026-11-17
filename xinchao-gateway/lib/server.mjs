@@ -7,7 +7,7 @@ import { makeLogger } from './log.mjs';
 import { GatewayState } from './state.mjs';
 import { makeXinchao } from './xinchao.mjs';
 import {
-  classifyLast, startsWithSkip, looksBackground, passesGate, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, stripLeadMeta, appNoteKind,
+  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, stripLeadMeta, appNoteKind,
 } from './turn.mjs';
 
 const HOP_BY_HOP = new Set([
@@ -257,11 +257,13 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
       }
       if (cfg.nowEnabled && cfg.xinchaoUrl) {
         const now = await xc.heartbeatAndNow();
+        let gate;
         if (clientGone) return;
         if (!now) {
           // 心潮没回，照常转发
-        } else if (!passesGate(now)) {
-          log('now-attach', 'skip', { why: 'gate' });
+        } else if (!(gate = gateCheck(now)).ok) {
+          // 0.1.12：写明哪条规则、第几行挡的（不带内容），好对着查是哪一行
+          log('now-attach', 'skip', { why: 'gate', rule: gate.rule, line: gate.line });
         } else if (!state.shouldAttachNow(now.digest, gap)) {
           log('now-attach', 'skip', { why: 'throttled' });
         } else {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   fakeUpstream, fakeXinchao, startGateway, call, chatBody, makeClock, MIN, DEFAULT_NOW,
 } from './helpers.mjs';
-import { passesGate } from '../lib/turn.mjs';
+import { passesGate, gateCheck } from '../lib/turn.mjs';
 
 const BLOCK = `\n\n〔心潮·此刻〕\n${DEFAULT_NOW.text}`;
 
@@ -57,6 +57,38 @@ test('4 硬门（单元）', () => {
   assert.equal(passesGate({ ...ok, text: '可以看 xinchao_context，3 条新消息' }), true, 'xinchao_context 和 3条 是允许的');
   assert.equal(passesGate({ ...ok, text: '第 1.2 次' }), false);
   assert.equal(passesGate(null), false);
+});
+
+test('0.1.12 硬门：黑匣子编号、xinchao_ 工具名放行；挡下时说清规则和第几行', () => {
+  // 照心潮念 4.2 context-envelope.js 那行的写法；编号照 black-box.js 的格式（box-时间36进制-6位随机）
+  const box = '情绪：平静\n另外：匣子里 2 条（1 条要提醒你：box-mwjcto3u-khyqtd、box-mwjd0a1b-qzpxmn；办完了 burn 掉才会消）。细的在 xinchao_context';
+  assert.deepEqual(gateCheck({ ok: true, text: box, lines: 2 }), { ok: true });
+  assert.equal(passesGate({ ok: true, text: '你想提醒自己的：9/14 的信（xinchao_box read box-1）', lines: 1 }), true);
+  // 编号去掉了，别的键名照样挡，而且说得出是第几行
+  assert.deepEqual(gateCheck({ ok: true, text: box + '\n念头：有个关于「possess」的念头一直在绕', lines: 3 }), { ok: false, rule: 'word', line: 3 });
+  assert.deepEqual(gateCheck({ ok: true, text: '想她\n想念值 0.5', lines: 2 }), { ok: false, rule: 'decimal', line: 2 });
+  assert.equal(passesGate({ ok: true, text: '另外：notebox-abcdefg', lines: 1 }), false, 'box- 前面连着字母的不算编号');
+  assert.deepEqual(gateCheck({ ok: true, text: '想她', lines: 9 }), { ok: false, rule: 'lines' });
+  assert.deepEqual(gateCheck({ ok: false }), { ok: false, rule: 'not-ok' });
+});
+
+test('0.1.12 硬门（经过网关）：带黑匣子编号的此刻附得上；挡下时日志写规则和行号、不带内容', async () => {
+  const boxText = '情绪：平静\n另外：匣子里 1 条（1 条要提醒你：box-mwjcto3u-khyqtd；办完了 burn 掉才会消）。细的在 xinchao_context';
+  for (const [text, attached] of [[boxText, true], [boxText + '\n念头：有个关于「possess」的念头一直在绕', false]]) {
+    const up = await fakeUpstream();
+    const xc = await fakeXinchao({ now: { ...DEFAULT_NOW, text, lines: text.split('\n').length } });
+    const g = await startGateway({ upstreamUrl: up.url, xinchaoUrl: xc.url });
+    try {
+      await call(g.base, '/v1/chat/completions', { body: chatBody('嗨') });
+      const last = up.calls[0].json.messages.at(-1).content;
+      assert.equal(last.includes('box-mwjcto3u-khyqtd'), attached);
+      const logs = g.logs.join('\n');
+      if (!attached) {
+        assert.match(logs, / now-attach skip why=gate rule=word line=3/);
+        assert.ok(!logs.includes('possess') && !logs.includes('box-'));
+      }
+    } finally { await g.close(); await up.close(); await xc.close(); }
+  }
 });
 
 for (const [name, now] of [

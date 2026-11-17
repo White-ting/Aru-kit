@@ -131,20 +131,35 @@ export function startsWithSkip(text, prefixes) {
 /**
  * 心潮返回的 now 能不能附。全部满足才返回 true。
  *  ok === true；0 < lines <= 8；0 < text.length <= 400；
- *  text 去掉"数字+条/句"和 xinchao_context 以后，不能再有 \d.\d，也不能有 6 个以上连续小写字母或下划线。
+ *  text 去掉"数字+条/句"、xinchao_ 工具名、黑匣子编号以后，不能再有 \d.\d，也不能有 6 个以上连续小写字母或下划线。
  */
 export function passesGate(now) {
-  if (!now || typeof now !== 'object') return false;
-  if (now.ok !== true) return false;
+  return gateCheck(now).ok;
+}
+
+/**
+ * 0.1.12：同一道门，挡下时说清是哪条、第几行（只给日志用，不带内容）。
+ *  rule：not-ok / lines / len / decimal（\d.\d）/ word（6 个以上连续小写字母或下划线）；line：第几行（从 1 数）。
+ * 判断前先去掉这些，它们是写给 TA 的、不是漏出来的键名：
+ *  - "数字+条/句"；
+ *  - xinchao_ 开头的工具名（以前只认 xinchao_context，此刻和信封里还会写 xinchao_box read …）；
+ *  - 黑匣子条目编号 box-时间-随机（心潮念 black-box.js 生成，比如 box-mwjcto3u-khyqtd；随机那段常有 6 个连着的字母，
+ *    「另外：匣子里 N 条（1 条要提醒你：box-…）」那行一出现整块此刻就被挡。使用者反馈）。
+ */
+export function gateCheck(now) {
+  if (!now || typeof now !== 'object' || now.ok !== true) return { ok: false, rule: 'not-ok' };
   const lines = Number(now.lines);
-  if (!Number.isFinite(lines) || lines <= 0 || lines > 8) return false;
-  if (typeof now.text !== 'string') return false;
+  if (!Number.isFinite(lines) || lines <= 0 || lines > 8) return { ok: false, rule: 'lines' };
+  if (typeof now.text !== 'string') return { ok: false, rule: 'not-ok' };
   const len = now.text.length;
-  if (len <= 0 || len > 400) return false;
-  const cleaned = now.text.replace(/\d+\s*[条句]/g, '').replace(/xinchao_context/g, '');
-  if (/\d\.\d/.test(cleaned)) return false;
-  if (/[a-z_]{6,}/.test(cleaned)) return false;
-  return true;
+  if (len <= 0 || len > 400) return { ok: false, rule: 'len' };
+  const rows = now.text.split('\n');
+  for (let i = 0; i < rows.length; i++) {
+    const cleaned = rows[i].replace(/\d+\s*[条句]/g, '').replace(/xinchao_[a-z_]+/g, '').replace(/\bbox-[0-9a-z]+(?:-[0-9a-z]+)*/g, '');
+    if (/\d\.\d/.test(cleaned)) return { ok: false, rule: 'decimal', line: i + 1 };
+    if (/[a-z_]{6,}/.test(cleaned)) return { ok: false, rule: 'word', line: i + 1 };
+  }
+  return { ok: true };
 }
 
 export function nowBlock(text) {
