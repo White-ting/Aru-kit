@@ -1,6 +1,6 @@
 # 心潮念网关 xinchao-gateway
 
-版本 0.1.10 · 作者 White-ting · 构建 dev
+版本 0.1.11 · 作者 White-ting · 构建 dev
 
 > **使用权限**：可以自己部署、自己改着用；原样的、改过的都不许转给别人或传到别处，想分享请给仓库地址 github.com/White-ting/Aru-kit。不许商用（包括收费帮人搭）。全文见 LICENSE。
 
@@ -76,7 +76,7 @@ node gateway.mjs
 看到下面这行就是启动好了：
 
 ```
-心潮念网关 0.1.10 已启动：http://127.0.0.1:8790/v1（此刻 开，回传 开，心潮超时 3000ms）
+心潮念网关 0.1.11 已启动：http://127.0.0.1:8790/v1（此刻 开，回传 开，心潮超时 3000ms）
 ```
 
 如果 `.env` 有漏填的项，它会用中文告诉你缺什么，然后退出。
@@ -142,6 +142,11 @@ Aru 在一条消息带附注的时候，会往她的话里加东西（0.1.6 照�
 - "她这一轮说了什么"＝最后一条 TA 的回复之后、她连着发的那几条，每条去掉附注再拼起来。所以她的话在前一条、环境在后一条也取得到。
 - 这一轮去掉附注以后一个字都不剩（只有附注、没有她的话），不算她在说话：日志 `turn ok kind=skip why=annotation`，不报心跳、不回传。
 - `STRIP_TAGS=` 留空时什么都不去，跟 0.1.3 一样。
+- **0.1.11 起另外认三种 Aru 自己写、用她的身份发的英文消息**（Aru Host 0.39）：
+  - 引用回复：开头 `[Replying to quoted text · reference data]`，换行一段 JSON（被引用的那句、编号），再一行短方括号，然后才是她的话。这几层整块去掉，只回传她的话；只引用、没说话的不算她在说话。
+  - 桥叫醒：`External event data, not an authored user message…`，不算她在说话（`turn ok kind=skip why=external`）。
+  - 工具取回的图：`Images returned by the completed tool call…` 单独一条，当工具回合，跟她前面那句配成一轮回传（`turn ok kind=tool after=tool-note`）。别的开头写进 `TOOL_PREFIXES`（用 `|` 分隔）。
+  - 以后 Aru 再出新写法：开 `DEBUG_SHAPE=2` 抓骨架发给作者；等不及的话，桥那类加进 `SKIP_PREFIXES`、工具那类加进 `TOOL_PREFIXES`。
 - 想核对：开 `DEBUG_SHAPE=1`，日志多一行 `shape ok clean=26 raw=2650 n=1`：`clean` 是去掉附注后几个字，应该跟她打的差不多；`raw` 是这一轮她那几条原来一共几个字；`n` 是去掉附注后还有字的有几条。**`clean` 跟 `raw` 一样大，就是一个字都没去掉**：附注不是成对标签的写法。开 `DEBUG_SHAPE=2` 再多记一行 `skel`（她那句话的骨架：标签名照写、属性值遮成 `…`、文字只留字数），把那几行发给作者看写法。
 
 ## 没有做的：Anthropic 格式、订阅账号
@@ -152,7 +157,7 @@ Aru 在一条消息带附注的时候，会往她的话里加东西（0.1.6 照�
 
 ## 怎么确认通了
 
-1. **网关活着吗**：浏览器打开 `http://127.0.0.1:8790/healthz`，看到 `{"ok":true,"version":"0.1.10","build":"dev","by":"White-ting"}` 就是活着。这个地址不用口令。
+1. **网关活着吗**：浏览器打开 `http://127.0.0.1:8790/healthz`，看到 `{"ok":true,"version":"0.1.11","build":"dev","by":"White-ting"}` 就是活着。这个地址不用口令。
 2. **在 App 里发一句话**，然后看网关的终端。正常的话会出现这样几行（每行开头是时间）：
 
 ```

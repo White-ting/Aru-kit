@@ -59,6 +59,7 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
   const stateDir = get('STATE_DIR') || path.join(baseDir, 'state');
   const skip = get('SKIP_PREFIXES');
   const bgp = get('BG_PATTERNS');
+  const toolp = get('TOOL_PREFIXES');
 
   return {
     port: num(get('PORT'), 8790),
@@ -82,6 +83,8 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
     xinchaoToken: get('XINCHAO_TOKEN') || '',
     xinchaoTimeoutMs: num(get('XINCHAO_TIMEOUT_MS'), 3000),
     skipPrefixes: (skip === undefined || skip === null ? '【|〔心潮念' : String(skip)).split('|').filter(Boolean),
+    // 0.1.11：这些开头的 user 消息是工具结果（Aru 把工具取回的图另起一条 user 发），当工具回合配对，不当她说话
+    toolPrefixes: (toolp === undefined || toolp === null ? 'Images returned by|Tool result|Tool output' : String(toolp)).split('|').map((x) => x.trim()).filter(Boolean),
     nowEnabled: bool(get('NOW_ENABLED'), true),
     eventEnabled: bool(get('EVENT_ENABLED'), true),
     onlyStream: bool(get('ONLY_STREAM'), false),

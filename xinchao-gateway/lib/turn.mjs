@@ -60,6 +60,69 @@ export function looksBackground(body, lastText, { bgMaxTokens = 0, bgPatterns = 
   return bgPatterns.some((p) => p && hay.includes(p.toLowerCase())) ? 'pattern' : '';
 }
 
+/**
+ * 0.1.11：Aru 用 user 身份发、但不是她打的字（朋友反馈，Aru Host 0.39.1）。role 都是 user，只能看字：
+ *  - 工具取回的图另起一条 user："Images returned by the completed tool call…" → 当工具回合（appNoteKind = 'tool'）
+ *  - 桥叫醒："External event data, not an authored user message…" → 不算她（appNoteKind = 'external'）
+ *  - 引用回复 → 开头整块剥掉（stripLeadMeta）。朋友 DEBUG_SHAPE=2 抓到的骨架是四层：
+ *      [Replying to quoted text · reference data]⏎{多行 JSON：引用的摘录、编号、role}⏎[五个字]⏎她的话⏎⏎<sent_at …>
+ * 工具那几个开头可以用 TOOL_PREFIXES 改；桥叫醒那句 Aru 自己写明了不是她，写死。前面多一个 [ 也认。
+ */
+const EXTERNAL_NOTE_RE = /^\[?\s*External event data|not an authored user message/i;
+
+export function appNoteKind(text, toolPrefixes = []) {
+  const t = String(text || '').replace(/^\s+/, '');
+  const t2 = t.replace(/^\[\s*/, '');
+  if (toolPrefixes.some((p) => p && (t.startsWith(p) || t2.startsWith(p)))) return 'tool';
+  if (EXTERNAL_NOTE_RE.test(t.slice(0, 400))) return 'external';
+  return '';
+}
+
+// 元数据头：认得的几个开头，或者"英文词 + 分隔符（· • ・ : | -）"
+const META_HEAD_RE = /^\[\s*(?:(?:Replying to|Quoted?|Reference|Attachments?)\b|[A-Za-z][A-Za-z ]{1,40}(?:[·•・‧:：|]|\s[-–—]\s))/i;
+
+/** 从 t[0] 的开括号数到配对的闭括号；JSON 模式（{）跳过字符串里的括号和转义。找不到返回 -1。 */
+function matchEnd(t, json) {
+  const open = t[0], close = open === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (json && c === '"') { inStr = true; continue; }
+    if (c === open) depth++;
+    else if (c === close && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * 开头的引用元数据整块剥掉，每一块：
+ *  1. [元数据头 …]：方括号配对数；引用里有落单的 [ 数不上时，退到第一个后面跟换行的 ]
+ *  2. 紧跟着的 {JSON}：括号配对（字符串里的 { } 不算），而且 JSON.parse 得通才剥——她自己打的 {…} 不会被吃
+ *  3. 紧跟着、单独一行的短方括号 [≤40 字]
+ * 只有第 1 步认出元数据头，才会看第 2、3 步。可以连着好几块。
+ */
+export function stripLeadMeta(text) {
+  const s0 = String(text || '');
+  let s = s0;
+  for (let n = 0; n < 5; n++) {
+    const t = s.replace(/^\s+/, '');
+    if (!META_HEAD_RE.test(t)) break;
+    let end = matchEnd(t, false);
+    if (end < 0) { const m = /\][ \t]*\r?\n/.exec(t); end = m ? m.index : -1; }
+    if (end < 0) break;
+    let r = t.slice(end + 1).replace(/^\s+/, '');
+    if (r[0] === '{') {
+      const e = matchEnd(r, true);
+      if (e > 0) { try { JSON.parse(r.slice(0, e + 1)); r = r.slice(e + 1).replace(/^\s+/, ''); } catch { /* 不是 JSON，留着 */ } }
+    }
+    const tag = /^\[[^[\]\r\n]{1,40}\][ \t]*(?:\r?\n|$)/.exec(r);
+    if (tag) r = r.slice(tag[0].length);
+    s = r;
+  }
+  return s === s0 ? s : s.replace(/^\s+/, '');
+}
+
 export function startsWithSkip(text, prefixes) {
   const t = String(text || '').replace(/^\s+/, '');
   return prefixes.some((p) => p && t.startsWith(p));

@@ -7,7 +7,7 @@ import { makeLogger } from './log.mjs';
 import { GatewayState } from './state.mjs';
 import { makeXinchao } from './xinchao.mjs';
 import {
-  classifyLast, startsWithSkip, looksBackground, passesGate, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail,
+  classifyLast, startsWithSkip, looksBackground, passesGate, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, stripLeadMeta, appNoteKind,
 } from './turn.mjs';
 
 const HOP_BY_HOP = new Set([
@@ -191,6 +191,7 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
     // ---------- 第 2 根线：此刻 ----------
     let turn = { kind: 'other' };
     let parts = [];   // 0.1.6：这一轮她发的几条，去掉附注以后还有字的
+    let noteKinds = [];   // 0.1.11：每条是不是 Aru 自己写的（tool / external / ''）
     let isHer = false;
     let herText = '';
     let gap = Infinity;
@@ -207,7 +208,10 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
       if (turn.kind === 'user') {
         const texts = tailUserTexts(body, format);
         turn.rawTurn = texts.join('\n');
-        const cleanedAll = texts.map((x) => stripAnnotations(x, cfg.stripTags, false));
+        // 0.1.11：先看每条是不是 Aru 自己写的（工具图 / 桥叫醒），再把开头的引用元数据（[Replying to …] + JSON + 短方括号）剥掉
+        const noAnno = texts.map((x) => stripAnnotations(x, cfg.stripTags, false));
+        noteKinds = noAnno.filter((x) => x.trim()).map((x) => appNoteKind(x, cfg.toolPrefixes));
+        const cleanedAll = noAnno.map((x) => stripLeadMeta(x));
         parts = cleanedAll.filter((x) => x.trim());
         if (cfg.debugShape) {
           // 0.1.7 调试：最近 10 条是谁发的（s 系统 u 她 a TA t 工具），这一轮她那几条各几个字（去附注前>后）。不记内容
@@ -221,14 +225,18 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         turn.said = said;
         // 0.1.8：只有附注、前面紧挨着工具结果 = 工具回合的后半段（Aru 在工具结果后面又塞了一条附注），照工具回合配对回传
         if (annoOnly && toolBeforeTail(body, format)) { turn = { kind: 'tool', after: 'annotation' }; annoOnly = false; }
+        // 0.1.11：Aru 把工具取回的图另起一条 user（"Images returned by the completed tool call…"）= 工具回合
+        else if (noteKinds.includes('tool')) turn = { kind: 'tool', after: 'tool-note' };
       }
+      const external = turn.kind === 'user' && noteKinds.includes('external');
       const bg = turn.kind === 'user' && !annoOnly ? looksBackground(body, said, cfg) : '';
       isHer = turn.kind === 'user'
         && !annoOnly
+        && !external
         && !(parts.length ? parts.some((x) => startsWithSkip(x, cfg.skipPrefixes)) : startsWithSkip(said, cfg.skipPrefixes))
         && !bg
         && (!cfg.onlyStream || body.stream === true);
-      if (turn.kind === 'user' && !isHer) log('turn', true, { kind: bg ? 'background' : 'skip', why: annoOnly ? 'annotation' : (bg || undefined) });
+      if (turn.kind === 'user' && !isHer) log('turn', true, { kind: bg ? 'background' : 'skip', why: annoOnly ? 'annotation' : external ? 'external' : (bg || undefined) });
       if (turn.kind === 'tool') log('turn', true, { kind: 'tool', after: turn.after });
     }
     if (isHer) {

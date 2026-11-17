@@ -1,4 +1,4 @@
-心潮念 → Aru 适配器 v1.2（2026-11-07）· 作者 White-ting
+心潮念 → Aru 适配器 v1.2（2026-11-07）· 心潮念网关 0.1.11（2026-11-18）· 作者 White-ting
 （教程第 2 步「给 Host 一个公网 HTTPS 地址」和几处踩坑提醒来自 罐儿 的补充；心潮念网关有两位测试者帮忙在真机上试过）
 
 使用权限（请先看，全文在 LICENSE.txt 和 xinchao-gateway/LICENSE）
@@ -7,6 +7,8 @@
 - 不许商用（包括收费帮人搭）。
 
 这是原版压缩包，原版只在 github.com/White-ting/Aru-kit 的 Releases 里下载。网上转来的别用。
+以后的更新都会在 GitHub 同步：https://github.com/White-ting/Aru-kit
+去 Releases 下载最新的压缩包；每次改了什么写在 CHANGELOG.md 和 xinchao-gateway/CHANGELOG.md。
 
 包里的东西：
 1. 教程.html  ← 主要看这个。双击用浏览器打开，从头跟着做；要复制的地方点一下就复制。

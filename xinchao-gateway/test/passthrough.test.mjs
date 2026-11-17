@@ -195,7 +195,7 @@ test('P6 /healthz 不要口令；/<口令>/healthz 也给看；/<错的>/healthz
     try {
       const a = await call(g.base, '/healthz', { method: 'GET', key: null });
       assert.equal(a.status, 200);
-      assert.equal(JSON.parse(a.body).version, '0.1.10');
+      assert.equal(JSON.parse(a.body).version, '0.1.11');
       const b = await call(g.base, `/${GW_KEY}/healthz`, { method: 'GET', key: null });
       assert.equal(b.status, 200);
       const c = await call(g.base, '/nope/healthz', { method: 'GET', key: null });

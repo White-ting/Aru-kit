@@ -1,5 +1,14 @@
 # 更新说明
 
+## 0.1.11（2026-11-18）
+
+起因：使用者反馈（Aru Host 0.39.1），潮汐浮标的「原话」经常是英文元数据，不是她说的那句。三种 Aru 自己写、用 user 身份发的消息被当成了她的话。role 都是 user，分不出来，只能看字：
+- **引用回复**：她引用一句再回复时，Aru 在她的话前面放了四层——`[Replying to quoted text · reference data]`、换行一段 JSON（被引用的那句、编号、role）、再一行短方括号、然后才是她的话。以前整段当她说的，存下来的前 40 字全是方括号和 JSON。现在开头这几层整块去掉：方括号按配对数；JSON 要括号配得上、而且真能解析才去（她自己打的 `{…}` 不会被吃）；短方括号要单独占一行才去。只引用、一个字没说的，不算她在说话（`skip why=annotation`）。照使用者 `DEBUG_SHAPE=2` 抓到的骨架拼了测试样本，骨架五段一字不差。
+- **桥叫醒**：`External event data, not an authored user message…` 开头（前面多个 `[` 也认），或者里面写着 `not an authored user message` 的，不算她在说话（`turn ok kind=skip why=external`）。
+- **工具取回的图**：Aru 把工具取回的图（比如 `fetchPhotoAttachment`）另起一条 user 消息发，开头 `Images returned by the completed tool call…`。以前当成她说的话（还被判成了「吃醋」）。现在当工具回合，工具走完跟她前面那句配成一轮回传（`turn ok kind=tool after=tool-note`）。新配置 `TOOL_PREFIXES`，默认 `Images returned by|Tool result|Tool output`，用 `|` 分隔。
+- 发给模型的那份照旧一个字不动，只是回传和判断时去掉。
+- 测试 83 项（`test/v0111.test.mjs`）。
+
 ## 2026-11-16 公开
 
 - **许可改了（只改许可和说明文字，代码没动）**：公开到 GitHub（github.com/White-ting/Aru-kit）。从这天起：可以自己部署、自己改着用；原样的、改过的都不许转给别人或传到别处，想分享给仓库地址；不许商用。之前私下发出的压缩包仍照它们自带的许可。
