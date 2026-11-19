@@ -42,6 +42,61 @@ export const REPORT_FIELDS = {
   workout: ["kind"], carplay: ["on"], wallet: ["card"], sound: ["sound"],
 };
 
+// 只检查 PUT 这次带来的项。返回第一处写错的说明；没有错误就返回 null。
+export function validateConfig(body) {
+  const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const range = (v, lo, hi, integer = false) => Number.isFinite(v) && v >= lo && v <= hi && (!integer || Number.isInteger(v));
+  const positive = v => Number.isFinite(v) && v > 0;
+  const text = (v, max) => typeof v === "string" && [...v].length <= max;
+  if (!object(body)) return "叫醒说明要用一对花括号包住各项设置（JSON 对象）。";
+  for (const k of ["late_night", "places", "long_session", "model", "mood", "inactivity", "work_end", "reports"]) {
+    if (own(body, k) && !object(body[k])) return `${k} 是一组设置，请用花括号填写，例如 {}。`;
+  }
+  if (own(body, "tz")) {
+    try {
+      if (typeof body.tz !== "string" || !body.tz.trim()) throw new Error();
+      new Intl.DateTimeFormat("zh-CN", { timeZone: body.tz });
+    } catch { return 'tz 时区不认识，请填有效的时区名字，例如 "Asia/Shanghai"。'; }
+  }
+  if (own(body, "note") && !text(body.note, 2000)) return "note 请填文字，最多 2000 字。";
+  const checks = [
+    [body, "daily_cap", "daily_cap", v => range(v, 0, 20, true), "0–20 的整数"],
+    [body, "cooldown_min", "cooldown_min", v => range(v, 0, 1440), "0–1440 之间的分钟数"],
+    [body.model, "daily_cap", "model.daily_cap", v => range(v, 0, 20, true), "0–20 的整数"],
+    [body.model, "every_min", "model.every_min", v => range(v, 10, 1440), "10–1440 之间的分钟数"],
+    [body.long_session, "minutes", "long_session.minutes", positive, "大于 0 的分钟数"],
+    [body.mood, "cooldown_min", "mood.cooldown_min", positive, "大于 0 的分钟数"],
+    [body.mood, "alone_hours", "mood.alone_hours", positive, "大于 0 的小时数"],
+    [body.mood, "keep_hours", "mood.keep_hours", positive, "大于 0 的小时数"],
+    [body.inactivity, "hours", "inactivity.hours", positive, "大于 0 的小时数"],
+    [body.work_end, "confirm_min", "work_end.confirm_min", positive, "大于 0 的分钟数"],
+  ];
+  for (const k of ["late_night", "model", "inactivity"]) {
+    checks.push([body[k], "from", `${k}.from`, v => range(v, 0, 23, true), "0–23 的整数（几点）"]);
+    checks.push([body[k], "to", `${k}.to`, v => range(v, 0, 24, true), "0–24 的整数（几点；24 = 到半夜，0 点到 24 点就是全天）"]);
+  }
+  for (const [group, key, path, valid, hint] of checks) {
+    if (group && own(group, key) && !valid(group[key])) return `${path} 请填${hint}。`;
+  }
+  if (body.places && own(body.places, "watch")) {
+    const watch = body.places.watch;
+    if (!Array.isArray(watch) || watch.length > 50) return "places.watch 请填地点列表（用方括号），最多 50 项。";
+    for (const [i, name] of watch.entries()) {
+      if (!text(name, 60)) return `places.watch 的第 ${i + 1} 项请填地点名称，最多 60 字。`;
+    }
+  }
+  for (const [k, v] of Object.entries(body.reports || {})) {
+    if (!object(v)) {
+      if (own(REPORT_FIELDS, k)) return `reports.${k} 是一组设置，请用花括号填写，例如 {}。`;
+      continue;
+    }
+    if (own(v, "wake_kinds") && !Array.isArray(v.wake_kinds)) return `reports.${k}.wake_kinds 请填列表（用方括号），例如 ["敲门"]。`;
+    if (own(v, "dedupe_min") && !range(v.dedupe_min, 0, 1440)) return `reports.${k}.dedupe_min 请填 0–1440 之间的分钟数（0 = 不防刷屏）。`;
+  }
+  return null;
+}
+
 export function mergeConfig(saved) {
   const c = structuredCloneSafe(DEFAULT_CONFIG);
   if (!saved || typeof saved !== "object") return c;
@@ -158,6 +213,7 @@ export function daySummary(events, tz) {
 // 工作、勿扰专注模式下拦的规则：这几种是"平常的关心"，等她忙完再说。到了关注的地点、她点了想聊天照常放行
 const QUIET_RULES = new Set(["long_session", "model", "inactivity", "work_end"]);
 const FOCUS_ZH = { work: "工作", dnd: "勿扰", sleep: "睡眠" };
+const FAIL_COOLDOWN = 10 * 60e3;
 
 // 现在有没有"别打扰她"的状态（工作/勿扰/想独处），没有返回 null。小模型、定时检查也用它，省得白问
 export function quietReason(state, now, tz) {
@@ -166,12 +222,17 @@ export function quietReason(state, now, tz) {
   return null;
 }
 
+export function failureReason(state, now) {
+  if (state.last_fail_ts == null || now - state.last_fail_ts >= FAIL_COOLDOWN) return null;
+  return "投递失败冷却（上次失败后 10 分钟内不再投递）";
+}
+
 export function guard(hit, ev, ctx) {
-  const c = ctx.config, s = ctx.state, now = ev.ts;
+  const c = ctx.config, s = ctx.state, now = ctx.now ?? ev.ts;
   const asked = hit.rule === "mood_request";   // 她自己点的想聊天：睡觉、专注、独处都不拦，只守上限和冷却
   const report = String(hit.rule || "").startsWith("report_");   // 小报告（声音、闹钟这些）叫醒
   if (s.asleep && hit.rule !== "late_night" && !asked) return "她在睡觉";
-  if (report && (c.reports || {}).night_quiet !== false && inHours(localParts(now, c.tz).hour, c.late_night.from, c.late_night.to)) {
+  if (report && (c.reports || {}).night_quiet !== false && inHours(localParts(ev.ts, c.tz).hour, c.late_night.from, c.late_night.to)) {
     return `夜里 ${c.late_night.from}–${c.late_night.to} 点，小报告不叫醒`;
   }
   if (!asked) {
@@ -182,8 +243,8 @@ export function guard(hit, ev, ctx) {
   const count = s.wakes_date === today ? (s.wakes_count || 0) : 0;
   if (count >= c.daily_cap) return `今天已经叫醒 ${count} 次（上限 ${c.daily_cap}）`;
   const cool = asked ? (c.mood.cooldown_min ?? 15) : c.cooldown_min;
-  if (s.last_wake_ts && now - s.last_wake_ts < cool * 60e3) {
-    return `离上次叫醒才 ${Math.round((now - s.last_wake_ts) / 60e3)} 分钟（冷却 ${cool}）`;
+  if (s.last_wake_ts != null && now - s.last_wake_ts < cool * 60e3) {
+    return `离上次叫醒才 ${Math.max(0, Math.round((now - s.last_wake_ts) / 60e3))} 分钟（冷却 ${cool}）`;
   }
   if (hit.rule === "late_night" && c.late_night.once_per_night && s.late_night_key === nightKey(now, c.tz)) return "今晚已经为熬夜叫过一次";
   if (hit.rule === "model") {
@@ -193,13 +254,13 @@ export function guard(hit, ev, ctx) {
   return null;
 }
 
-// 放行之后更新状态
+// 投递成功才更新状态。这里的 ts 是收到的时间。
 export function afterWake(hit, ev, ctx) {
-  const c = ctx.config, s = { ...ctx.state }, today = localParts(ev.ts, c.tz).date;
+  const c = ctx.config, s = { ...ctx.state }, ts = Math.max(ev.ts, s.last_wake_ts ?? ev.ts), today = localParts(ts, c.tz).date;
   s.wakes_count = (s.wakes_date === today ? (s.wakes_count || 0) : 0) + 1;
   s.wakes_date = today;
-  s.last_wake_ts = ev.ts;
-  if (hit.rule === "late_night") s.late_night_key = nightKey(ev.ts, c.tz);
+  s.last_wake_ts = ts;
+  if (hit.rule === "late_night") s.late_night_key = nightKey(ts, c.tz);
   if (hit.rule === "model") {
     s.model_count = (s.model_date === today ? (s.model_count || 0) : 0) + 1;
     s.model_date = today;
@@ -212,22 +273,32 @@ export function afterWake(hit, ev, ctx) {
 // 小报告里截屏、关闹钟、刷卡是她亲手做的，也算；通知、声音、Wi-Fi、CarPlay、助眠、运动可能是自己发生的，不算
 const ACTIVITY = new Set(["app_open", "app_close", "arrive", "leave", "wake_up", "mood", "screenshot", "alarm_stop", "wallet"]);
 
-// 事件改状态（不叫醒）。config 给的是 mood.alone_hours 这些数
+// 事件改状态（不叫醒）。每种状态按自己的发生时间排序，迟到的报告只补时间线。
 export function applyState(ev, state, config) {
   const s = { ...state }, d = ev.data || {}, c = config || DEFAULT_CONFIG;
-  if (ACTIVITY.has(ev.type) && !(s.last_activity_ts > ev.ts)) {
+  const fresh = k => !(s[k] > ev.ts);
+  const sleep = asleep => {
+    if (fresh("sleep_at")) { s.asleep = asleep; s.sleep_at = ev.ts; }
+  };
+  if (ACTIVITY.has(ev.type) && fresh("last_activity_ts")) {
     s.last_activity_ts = ev.ts;
     delete s.inactivity_pending_since;
   }
-  if (ev.type === "sleep") s.asleep = true;
-  if (ev.type === "wake_up" || ev.type === "alarm_stop") s.asleep = false;   // 关掉闹钟 = 醒了
-  if (ev.type === "carplay") { if (d.on) s.in_car_at = ev.ts; else delete s.in_car_at; }   // 连着 CarPlay = 在开车
-  if (ev.type === "battery_low") { s.battery_low = true; s.battery_level = d.level; s.battery_at = ev.ts; }
-  if (ev.type === "battery_ok" || ev.type === "charge_start") {
-    if (s.battery_low) { s.battery_low = false; s.battery_at = ev.ts; }
+  if (ev.type === "sleep") sleep(true);
+  if (ev.type === "wake_up" || ev.type === "alarm_stop") sleep(false);   // 关掉闹钟 = 醒了
+  if (ev.type === "carplay" && fresh("carplay_at") && fresh("in_car_at")) {
+    s.carplay_at = ev.ts;
+    if (d.on) s.in_car_at = ev.ts; else delete s.in_car_at;
+  }
+  if (ev.type === "battery_low" && fresh("battery_at")) {
+    s.battery_low = true; s.battery_level = d.level; s.battery_at = ev.ts;
+  }
+  if ((ev.type === "battery_ok" || ev.type === "charge_start") && fresh("battery_at")) {
+    if (s.battery_low) s.battery_low = false;
+    s.battery_at = ev.ts;
     if (ev.type === "battery_ok" && d.level != null) s.battery_level = d.level;
   }
-  if (ev.type === "focus_change") {
+  if (ev.type === "focus_change" && fresh("focus_at")) {
     const was = s.focus_mode || null;
     if (d.active) {
       if (was === "work" && d.mode !== "work") s.pending_work_end_at = ev.ts;   // 从工作直接切到别的模式，也算关了工作
@@ -240,10 +311,10 @@ export function applyState(ev, state, config) {
       s.focus_mode = null;
       if (d.mode === "work") s.pending_work_end_at = ev.ts;
     }
-    if (d.mode === "sleep") s.asleep = !!d.active;   // 睡眠专注模式 = 睡觉
+    if (d.mode === "sleep") sleep(!!d.active);   // 睡眠专注模式 = 睡觉
     s.focus_at = ev.ts;
   }
-  if (ev.type === "mood") {
+  if (ev.type === "mood" && fresh("mood_at")) {
     s.mood = d.mood; s.mood_at = ev.ts;
     s.alone_until = d.mood === "alone" ? ev.ts + (c.mood.alone_hours ?? 4) * 3600e3 : 0;   // 点了别的心情，想独处就作废
   }
@@ -255,7 +326,7 @@ export function confirmWorkEnd(state, now, config) {
   const c = config.work_end || {}, s = { ...state };
   if (!s.pending_work_end_at || now - s.pending_work_end_at < (c.confirm_min ?? 15) * 60e3) return { state, ended: null };
   const ended = { start: s.work_started_at || null, end: s.pending_work_end_at };
-  s.work_ended_at = s.pending_work_end_at;
+  s.work_ended_at = Math.max(s.work_ended_at ?? ended.end, ended.end);
   delete s.pending_work_end_at;
   return { state: s, ended };
 }
@@ -300,6 +371,8 @@ export function statusLine(state, now, config) {
   else if (s.mood && s.mood !== "alone" && s.mood_at && now - s.mood_at < (config.mood.keep_hours ?? 6) * 3600e3) parts.push(`${hm(s.mood_at)} 选的心情是「${MOOD_ZH[s.mood] || s.mood}」`);
   if (s.in_car_at && now - s.in_car_at < 4 * 3600e3) parts.push(`在车上（${hm(s.in_car_at)} 连上 CarPlay）`);
   if (s.battery_low) parts.push(`手机电量低${s.battery_level != null ? `（${s.battery_level}%）` : ""}`);
+  const failed = failureReason(s, now);
+  if (failed) parts.push(`${failed}，到 ${hm(s.last_fail_ts + FAIL_COOLDOWN)}`);
   return parts.join("，");
 }
 

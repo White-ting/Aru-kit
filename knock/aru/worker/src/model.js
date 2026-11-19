@@ -69,13 +69,18 @@ function textOf(r) {
 }
 
 export async function askModel(env, config, messages) {
-  const m = config.model || {};
-  if (String(env.LLM_URL || "").trim()) {
-    const r = await fetch(String(env.LLM_URL).trim(), {
+  const m = config.model || {}, url = String(env.LLM_URL || "").trim();
+  if (url) {
+    try {
+      if (!/^https:\/\//i.test(url) || new URL(url).protocol !== "https:") throw new Error();
+    } catch { throw new Error("LLM_URL 必须使用有效的 HTTPS 地址"); }
+    const r = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + String(env.LLM_KEY || "").trim() },
       body: JSON.stringify({ model: m.name, messages, max_tokens: 300, temperature: 0.3 }),
+      redirect: "manual",   // 不跟着跳到另一个地址，免得把简报发给没配置的服务
     });
+    if (r.status >= 300 && r.status < 400) throw new Error(`小模型地址被重定向了（HTTP ${r.status}），请填最终的 HTTPS 地址`);
     if (!r.ok) throw new Error(`小模型接口 HTTP ${r.status}：${(await r.text()).slice(0, 120)}`);
     return textOf(await r.json());
   }

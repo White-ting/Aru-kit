@@ -17,10 +17,12 @@ function bytesToB64(u8) {
 export function checkBundle(bundle) {
   if (bundle?.schema !== "aru.wake-bridge.sender-bundle.v2"
       || typeof bundle.triggerId !== "string" || !bundle.triggerId
-      || typeof bundle.submitURL !== "string" || !/^https?:\/\//.test(bundle.submitURL)
       || typeof bundle.submitToken !== "string" || !bundle.submitToken) {
     throw new Error("发送凭证格式不对");
   }
+  try {
+    if (typeof bundle.submitURL !== "string" || !/^https:\/\//i.test(bundle.submitURL) || new URL(bundle.submitURL).protocol !== "https:") throw new Error();
+  } catch { throw new Error("发送凭证里的投递地址必须是有效的 HTTPS 地址"); }
   if (b64ToBytes(bundle.encryptionKey || "").length !== 32) throw new Error("发送凭证里的密钥不是 32 字节");
 }
 
@@ -43,12 +45,13 @@ export async function sealWakeEvent(bundle, content, eventId = crypto.randomUUID
   return { schema: "aru.wake-bridge.sealed-event.v1", eventId, sealedPayload: bytesToB64(sealed) };
 }
 
-export async function submitWakeEvent(bundle, content) {
+export async function submitWakeEvent(bundle, content, signal) {
   const env = await sealWakeEvent(bundle, content);
   const r = await fetch(bundle.submitURL, {
     method: "POST",
     headers: { authorization: `Bearer ${bundle.submitToken}`, "content-type": "application/json" },
     body: JSON.stringify(env),
+    signal,
     redirect: "manual",   // Cloudflare Workers 不认 "error"：手动看，被重定向就当失败（官方发送器也拒绝重定向）
   });
   if (r.status >= 300 && r.status < 400) throw new Error(`投递地址被重定向了（HTTP ${r.status}），不投`);
