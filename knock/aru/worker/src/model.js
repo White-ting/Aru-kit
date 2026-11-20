@@ -3,7 +3,11 @@
 // 默认用 Cloudflare 自己的 Workers AI（绑定名 AI，数据不出 Cloudflare）；
 // 设了 LLM_URL + LLM_KEY 就改走 OpenAI 兼容的接口（DeepSeek、百炼等），模型名写在叫醒说明的 model.name。
 
-export const DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+// 11-20：原来的 @cf/qwen/qwen3-30b-a3b-fp8 被 Cloudflare 下架（从 2026-11-20 起回 HTTP 410、错误码 5028）。
+// 换成官方推荐的小模型里便宜的那个 gemma-4（价钱跟原来差不多）；另一个推荐的 @cf/qwen/qwen3.8-27b 中文更好，但贵将近十倍。
+export const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
+// 新模型都会先「想一想」再回答，想的字也算在上限里：上限放宽到 1000，免得想完了没字写答案（只回一行 JSON，用不了多少）
+const MAX_TOKENS = 1000;
 
 // 性子：model.style 填哪个，判断标准就换成哪段。不认识的当"少叫"
 const STYLES = {
@@ -77,7 +81,7 @@ export async function askModel(env, config, messages) {
     const r = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + String(env.LLM_KEY || "").trim() },
-      body: JSON.stringify({ model: m.name, messages, max_tokens: 300, temperature: 0.3 }),
+      body: JSON.stringify({ model: m.name, messages, max_tokens: MAX_TOKENS, temperature: 0.3 }),
       redirect: "manual",   // 不跟着跳到另一个地址，免得把简报发给没配置的服务
     });
     if (r.status >= 300 && r.status < 400) throw new Error(`小模型地址被重定向了（HTTP ${r.status}），请填最终的 HTTPS 地址`);
@@ -86,5 +90,7 @@ export async function askModel(env, config, messages) {
   }
   if (!env.AI) throw new Error("没绑定 Workers AI（绑定名要叫 AI），也没设 LLM_URL");
   const name = m.name && m.name.startsWith("@") ? m.name : DEFAULT_MODEL;
-  return textOf(await env.AI.run(name, { messages, max_tokens: 300, temperature: 0.3 }));
+  const opt = { messages, max_tokens: MAX_TOKENS, temperature: 0.3 };
+  if (/^@cf\/qwen\/qwen3\.8/.test(name)) opt.reasoning_effort = "low";   // qwen3.8 默认想得最深（xhigh），又慢又贵；这里只要判断叫不叫，最浅一档就够
+  return textOf(await env.AI.run(name, opt));
 }

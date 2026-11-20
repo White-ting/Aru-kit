@@ -164,7 +164,16 @@ let ask = await adminM("/ask", "POST");
 check("管理页问一次：只问不叫", ask.ok && ask.wake === false && /正常聊微信/.test(ask.reason) && calls.length === 1);
 const sys = calls[0].input.messages[0].content, usr = calls[0].input.messages[1].content;
 check("提示里有 TA 的原话和今天的摘要", sys.includes("她一个人闷着刷手机") && /微信 开了 1 次、约 90 分钟/.test(usr), usr.split("\n")[1]);
-check("默认模型是 Workers AI 的 qwen3", calls[0].name === "@cf/qwen/qwen3-30b-a3b-fp8");
+check("默认模型是 Workers AI 的 gemma-4（qwen3-30b 11-20 下架了）", calls[0].name === "@cf/google/gemma-4-26b-a4b-it");
+{ // 11-20 换模型：新模型回 OpenAI 那种 choices；qwen3.8 要带最浅的思考档，字数上限放宽
+  let seen = null;
+  const fakeAI = { run: async (n, o) => { seen = { n, o }; return { choices: [{ message: { content: '{"wake": true, "reason": "她熬夜"}' } }] }; } };
+  const d = parseDecision(await askModel({ AI: fakeAI }, { model: { name: "@cf/qwen/qwen3.8-27b" } }, []));
+  check("新模型的 choices 格式读得出来", d.wake === true && d.reason === "她熬夜");
+  check("qwen3.8 带 reasoning_effort low、上限 1000", seen.n === "@cf/qwen/qwen3.8-27b" && seen.o.reasoning_effort === "low" && seen.o.max_tokens === 1000);
+  await askModel({ AI: fakeAI }, { model: {} }, []);
+  check("默认的 gemma-4 不带 reasoning_effort", seen.n === "@cf/google/gemma-4-26b-a4b-it" && !("reasoning_effort" in seen.o));
+}
 check("默认性子是少叫", sys.includes("拿不准就不叫"));
 await adminM("/config", "PUT", { model: { enabled: true, from: 0, to: 23, style: "多叫" } });
 replies.push({ response: '{"wake": false, "reason": "x"}' });

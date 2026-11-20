@@ -1,4 +1,4 @@
-// knock 守门人 v2.2（2026-11-19）· White-ting · 构建 dev
+// knock 守门人 v2.2.1（2026-11-20）· White-ting · 构建 dev
 // 原版在 github.com/White-ting/Aru-kit。合成的单文件，别直接改这里，改 src/ 再跑 python3 build.py
 // 使用权限：可以自己部署、自己改着用；不许转给别人或传到别处（分享请给 github.com/White-ting/Aru-kit）；不许商用。
 // 全文见 LICENSE。其中「seal.js」一段改写自 aru-host 的 wake-send.mjs（https://github.com/Aevella/aru-host），照 Apache-2.0（不受上面限制），见 LICENSE-APACHE。
@@ -513,7 +513,11 @@ async function submitWakeEvent(bundle, content, signal) {
 // 默认用 Cloudflare 自己的 Workers AI（绑定名 AI，数据不出 Cloudflare）；
 // 设了 LLM_URL + LLM_KEY 就改走 OpenAI 兼容的接口（DeepSeek、百炼等），模型名写在叫醒说明的 model.name。
 
-const DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+// 11-20：原来的 @cf/qwen/qwen3-30b-a3b-fp8 被 Cloudflare 下架（从 2026-11-20 起回 HTTP 410、错误码 5028）。
+// 换成官方推荐的小模型里便宜的那个 gemma-4（价钱跟原来差不多）；另一个推荐的 @cf/qwen/qwen3.8-27b 中文更好，但贵将近十倍。
+const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
+// 新模型都会先「想一想」再回答，想的字也算在上限里：上限放宽到 1000，免得想完了没字写答案（只回一行 JSON，用不了多少）
+const MAX_TOKENS = 1000;
 
 // 性子：model.style 填哪个，判断标准就换成哪段。不认识的当"少叫"
 const STYLES = {
@@ -587,7 +591,7 @@ async function askModel(env, config, messages) {
     const r = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + String(env.LLM_KEY || "").trim() },
-      body: JSON.stringify({ model: m.name, messages, max_tokens: 300, temperature: 0.3 }),
+      body: JSON.stringify({ model: m.name, messages, max_tokens: MAX_TOKENS, temperature: 0.3 }),
       redirect: "manual",   // 不跟着跳到另一个地址，免得把简报发给没配置的服务
     });
     if (r.status >= 300 && r.status < 400) throw new Error(`小模型地址被重定向了（HTTP ${r.status}），请填最终的 HTTPS 地址`);
@@ -596,7 +600,9 @@ async function askModel(env, config, messages) {
   }
   if (!env.AI) throw new Error("没绑定 Workers AI（绑定名要叫 AI），也没设 LLM_URL");
   const name = m.name && m.name.startsWith("@") ? m.name : DEFAULT_MODEL;
-  return textOf(await env.AI.run(name, { messages, max_tokens: 300, temperature: 0.3 }));
+  const opt = { messages, max_tokens: MAX_TOKENS, temperature: 0.3 };
+  if (/^@cf\/qwen\/qwen3\.8/.test(name)) opt.reasoning_effort = "low";   // qwen3.8 默认想得最深（xhigh），又慢又贵；这里只要判断叫不叫，最浅一档就够
+  return textOf(await env.AI.run(name, opt));
 }
 
 // ===== index.js =====
@@ -605,7 +611,7 @@ async function askModel(env, config, messages) {
 // 规则没碰到的，交给小模型看一眼（定时、或者事件"差一点"碰到规则时），它说叫也照样要过硬底线
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-const VERSION = "2.2", RELEASED = "2026-11-19", BUILD = "dev";
+const VERSION = "2.2.1", RELEASED = "2026-11-20", BUILD = "dev";
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 

@@ -80,7 +80,7 @@ npx wrangler deploy
 - **看什么**：`note`、今天的摘要（起床时间、各 App 开了几次待了多久、去过哪）、最近两小时、上次叫醒。
 - **性子** `model.style`：`少叫`（默认）/ `适中` / `多叫`，换的是提示里的判断标准。
 - **回什么**：只回 `{"wake": bool, "reason": "写给 AI 看的一句话"}`。说叫也要过硬底线，另有自己的每日上限 `model.daily_cap`。理由写进简报（"守门人的小模型看了觉得——…"）。
-- **用哪个**：默认 Workers AI（`wrangler.toml` 的 `[ai]` 绑定，模型 `@cf/qwen/qwen3-30b-a3b-fp8`）；设了 `LLM_URL` + `LLM_KEY` 就走 OpenAI 兼容接口，模型名写 `model.name`。
+- **用哪个**：默认 Workers AI（`wrangler.toml` 的 `[ai]` 绑定，模型 `@cf/google/gemma-4-26b-a4b-it`；原来的 `@cf/qwen/qwen3-30b-a3b-fp8` 2026-11-20 被 Cloudflare 下架）；设了 `LLM_URL` + `LLM_KEY` 就走 OpenAI 兼容接口，模型名写 `model.name`。
 - 10-20 在真的 Workers AI 上实测：回话格式能读，判断合理（"最近两小时频繁开关机，但没有异常行为，暂不叫醒"）。
 - 每次判断记在 `checks` 表：`GET /checks`；`POST /ask` 只问不叫（管理页的「现在问它一次」）。
 
