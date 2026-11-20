@@ -7,7 +7,7 @@ import { submitWakeEvent } from "./seal.js";
 import { buildMessages, parseDecision, askModel } from "./model.js";
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-export const VERSION = "2.2.1", RELEASED = "2026-11-20", BUILD = "dev";
+export const VERSION = "2.2.2", RELEASED = "2026-11-20", BUILD = "dev";
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 

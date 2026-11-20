@@ -6,7 +6,9 @@
 // 11-20：原来的 @cf/qwen/qwen3-30b-a3b-fp8 被 Cloudflare 下架（从 2026-11-20 起回 HTTP 410、错误码 5028）。
 // 换成官方推荐的小模型里便宜的那个 gemma-4（价钱跟原来差不多）；另一个推荐的 @cf/qwen/qwen3.8-27b 中文更好，但贵将近十倍。
 export const DEFAULT_MODEL = "@cf/google/gemma-4-26b-a4b-it";
-// 新模型都会先「想一想」再回答，想的字也算在上限里：上限放宽到 1000，免得想完了没字写答案（只回一行 JSON，用不了多少）
+// 新模型都会先「想一想」再回答，想的字也算在上限里。11-20 在真 Workers AI 上量过：gemma-4 默认想 1000～3000 多字，
+// 上限 300 次次没答案、1000 也三次里断一次；关掉思考（enable_thinking: false）1～3 秒出答案、只用 30 来个，8 个场景判断都对。
+// 所以 gemma 关思考；上限留 1000 兜着别的模型
 const MAX_TOKENS = 1000;
 
 // 性子：model.style 填哪个，判断标准就换成哪段。不认识的当"少叫"
@@ -91,6 +93,7 @@ export async function askModel(env, config, messages) {
   if (!env.AI) throw new Error("没绑定 Workers AI（绑定名要叫 AI），也没设 LLM_URL");
   const name = m.name && m.name.startsWith("@") ? m.name : DEFAULT_MODEL;
   const opt = { messages, max_tokens: MAX_TOKENS, temperature: 0.3 };
-  if (/^@cf\/qwen\/qwen3\.8/.test(name)) opt.reasoning_effort = "low";   // qwen3.8 默认想得最深（xhigh），又慢又贵；这里只要判断叫不叫，最浅一档就够
+  if (/^@cf\/qwen\/qwen3\.8/.test(name)) opt.reasoning_effort = "low";   // qwen3.8 默认想得最深（xhigh），又慢又贵；这里只要判断叫不叫，最浅一档就够（实测 5 秒、想 170 字）
+  if (/^@cf\/google\/gemma-4/.test(name)) opt.chat_template_kwargs = { enable_thinking: false };   // gemma-4 不关思考会想到上限还没答案
   return textOf(await env.AI.run(name, opt));
 }

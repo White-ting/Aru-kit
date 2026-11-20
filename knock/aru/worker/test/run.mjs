@@ -172,7 +172,7 @@ check("默认模型是 Workers AI 的 gemma-4（qwen3-30b 11-20 下架了）", c
   check("新模型的 choices 格式读得出来", d.wake === true && d.reason === "她熬夜");
   check("qwen3.8 带 reasoning_effort low、上限 1000", seen.n === "@cf/qwen/qwen3.8-27b" && seen.o.reasoning_effort === "low" && seen.o.max_tokens === 1000);
   await askModel({ AI: fakeAI }, { model: {} }, []);
-  check("默认的 gemma-4 不带 reasoning_effort", seen.n === "@cf/google/gemma-4-26b-a4b-it" && !("reasoning_effort" in seen.o));
+  check("默认的 gemma-4 关掉思考、不带 reasoning_effort", seen.n === "@cf/google/gemma-4-26b-a4b-it" && seen.o.chat_template_kwargs && seen.o.chat_template_kwargs.enable_thinking === false && !("reasoning_effort" in seen.o));
 }
 check("默认性子是少叫", sys.includes("拿不准就不叫"));
 await adminM("/config", "PUT", { model: { enabled: true, from: 0, to: 23, style: "多叫" } });
