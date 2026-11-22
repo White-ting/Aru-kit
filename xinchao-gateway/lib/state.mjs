@@ -9,7 +9,7 @@ export class GatewayState {
     this.cfg = cfg;
     this.clock = clock;
     this.file = dir ? path.join(dir, 'gateway-state.json') : null;
-    this.s = { lastUserAt: 0, now: { digest: null, attachedAt: 0 }, event: { sent: [] } };
+    this.s = { lastUserAt: 0, now: { digest: null, attachedAt: 0 }, event: { sent: [] }, sig: null };   // sig：0.1.16 临界点模式，上一句看到的此刻要点
     this.pendingTool = null; // 工具调用中途的那一轮，只放内存
     this._load();
   }
@@ -22,6 +22,7 @@ export class GatewayState {
         this.s.lastUserAt = Number(j.lastUserAt) || 0;
         if (j.now) this.s.now = { digest: j.now.digest ?? null, attachedAt: Number(j.now.attachedAt) || 0 };
         if (j.event && Array.isArray(j.event.sent)) this.s.event.sent = j.event.sent.map(Number).filter(Number.isFinite);
+        if (j.sig && typeof j.sig === 'object') this.s.sig = { surge: Array.isArray(j.sig.surge) ? j.sig.surge.map(String) : [], emo: String(j.sig.emo || ''), kinds: Array.isArray(j.sig.kinds) ? j.sig.kinds.map(String) : [] };
       }
     } catch { /* 没有或者坏了就从头来 */ }
   }
@@ -70,6 +71,10 @@ export class GatewayState {
     if (sent.length >= this.cfg.eventMaxPerHour) return false;
     return true;
   }
+
+  /** 0.1.16：临界点模式。上一句看到的此刻要点（不管那句贴没贴），没有是 null */
+  lastSig() { return this.s.sig; }
+  saveSig(sig) { this.s.sig = sig; this._save(); }
 
   markEventSent() {
     const t = this.clock();

@@ -7,7 +7,7 @@ import { makeLogger } from './log.mjs';
 import { GatewayState } from './state.mjs';
 import { makeXinchao } from './xinchao.mjs';
 import {
-  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, describeTail, replyToolText, hideNumbers, ownBody, stripLeadMeta, appNoteKind,
+  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, describeTail, replyToolText, hideNumbers, ownBody, nowSignals, signalWhy, stripLeadMeta, appNoteKind,
 } from './turn.mjs';
 
 const HOP_BY_HOP = new Set([
@@ -267,14 +267,24 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         } else if (!(gate = gateCheck(now)).ok) {
           // 0.1.12：写明哪条规则、第几行挡的（不带内容），好对着查是哪一行
           log('now-attach', 'skip', { why: 'gate', rule: gate.rule, line: gate.line });
-        } else if (!state.shouldAttachNow(now.digest, gap)) {
-          log('now-attach', 'skip', { why: 'throttled' });
         } else {
+          // 0.1.16：NOW_MODE=signal（临界点模式）——不每句贴，跟她上一句看到的此刻比，到了临界点才贴；不管贴没贴都记下这一句的要点。回传照常
+          let sig = '';
+          if (cfg.nowMode === 'signal') {
+            const cur = nowSignals(now.text);
+            const w = signalWhy(state.lastSig(), cur);   // 从来没看过此刻 = first；隔得久回来 = back；不然看到没到临界点
+            sig = w === 'first' ? w : gap > cfg.nowForceGapMin * 60 * 1000 ? 'back' : w;
+            state.saveSig(cur);
+          }
+          if (cfg.nowMode === 'signal' && !sig) log('now-attach', 'skip', { why: 'quiet' });
+          else if (cfg.nowMode !== 'signal' && !state.shouldAttachNow(now.digest, gap)) log('now-attach', 'skip', { why: 'throttled' });
+          else {
           const nowText = ownBody(cfg.aiSeesNumbers ? now.text : hideNumbers(now.text));   // 0.1.15：AI_SEES_NUMBERS=false 时把数换成说法；身体那行写明是 TA 自己的
           outBody = Buffer.from(JSON.stringify(injectNow(body, nowText)));
           state.markAttached(now.digest);
           attachedNow = nowText;
-          log('now-attach', true, { chars: nowText.length, nums: cfg.aiSeesNumbers ? undefined : 'hidden' });
+          log('now-attach', true, { chars: nowText.length, nums: cfg.aiSeesNumbers ? undefined : 'hidden', sig: sig || undefined });
+          }
         }
       }
     }

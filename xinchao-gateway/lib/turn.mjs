@@ -474,3 +474,37 @@ export function hideNumbers(text) {
 export function ownBody(text) {
   return String(text || '').replace(/^身体：/m, '身体（你自己的）：');
 }
+
+
+/**
+ * 0.1.16：临界点模式（NOW_MODE=signal）用。从心潮念给的此刻文字里取三样要点（心潮念不给结构化数据，只能看字，
+ * 照心潮念 4.2 的写法：驱力那行「想她（涌·想黏着）、牵挂（涨）」，驱力分五档 静/平/涨/落/涌；情绪那行「情绪：委屈，想黏着；刚才……」）：
+ *   surge：到了「涌」的驱力名；emo：情绪名（「平静」「松弛」后面粘的冷暖字不算）；
+ *   kinds：出现了哪几种「要注意」的行——念头、还在气（记仇）、矛盾（拧着）、刚醒、睡着。
+ */
+export const SIGNAL_KINDS = ['念头', '还在气', '矛盾', '刚醒', '睡着'];
+export function nowSignals(text) {
+  const surge = [], kinds = [];
+  let emo = '';
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('驱力：')) {
+      for (const m of line.slice(3).matchAll(/([^、（]+)（([^）·]+)/g)) if (m[2].trim() === '涌') surge.push(m[1].trim());
+    } else if (line.startsWith('情绪：')) {
+      const head = line.slice(3).split(/[，；]/)[0].trim();
+      emo = /^(平静|松弛)/.test(head) ? head.slice(0, 2) : head;
+    } else {
+      for (const k of SIGNAL_KINDS) if (line.startsWith(k) && !kinds.includes(k)) kinds.push(k);
+    }
+  }
+  return { surge, emo, kinds };
+}
+
+/** 跟上一句比，到没到临界点：返回原因（surge 新到涌 / emotion 情绪变了 / line 冒出新的那几种行 / first 第一次），没到返回 '' */
+export function signalWhy(prev, cur) {
+  if (!prev) return 'first';
+  if (cur.surge.some((x) => !prev.surge.includes(x))) return 'surge';
+  if (cur.emo && cur.emo !== prev.emo) return 'emotion';
+  if (cur.kinds.some((x) => !prev.kinds.includes(x))) return 'line';
+  return '';
+}

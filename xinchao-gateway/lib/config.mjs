@@ -89,6 +89,9 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
     // 0.1.14：TA 用来「说话」的工具（Aru 的语音条是 generateVoice），里面的 text 算 TA 的回话一起回传。| 分隔，不分大小写；留空 = 不算
     // 0.1.15：TA 看不看得到数值（有的 AI 不喜欢看见数字）。false = 发给 TA 的那份把数换成说法（此刻里「心跳 72」→「心跳平稳」）；人在心潮念网页上照样看得到。默认 true（照旧）
     aiSeesNumbers: bool(get('AI_SEES_NUMBERS'), true),
+    // 0.1.16：此刻怎么贴。always = 每句都贴（默认，照旧）；signal = 临界点模式，只在这几种时候贴：新有驱力到了「涌」、情绪变了、
+    // 冒出念头/还在气/矛盾/刚醒/睡着这几种行、她隔了 NOW_FORCE_GAP_MIN 分钟以上回来的第一句。回传、心跳不受影响
+    nowMode: String(get('NOW_MODE') ?? 'always').trim().toLowerCase() === 'signal' ? 'signal' : 'always',
     replyTools: (rtools === undefined || rtools === null ? 'generateVoice' : String(rtools)).split('|').map((x) => x.trim().toLowerCase()).filter(Boolean),
     nowEnabled: bool(get('NOW_ENABLED'), true),
     eventEnabled: bool(get('EVENT_ENABLED'), true),
