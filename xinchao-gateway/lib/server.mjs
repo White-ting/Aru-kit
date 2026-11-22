@@ -7,7 +7,7 @@ import { makeLogger } from './log.mjs';
 import { GatewayState } from './state.mjs';
 import { makeXinchao } from './xinchao.mjs';
 import {
-  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, describeTail, replyToolText, stripLeadMeta, appNoteKind,
+  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, describeTail, replyToolText, hideNumbers, ownBody, stripLeadMeta, appNoteKind,
 } from './turn.mjs';
 
 const HOP_BY_HOP = new Set([
@@ -270,10 +270,11 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         } else if (!state.shouldAttachNow(now.digest, gap)) {
           log('now-attach', 'skip', { why: 'throttled' });
         } else {
-          outBody = Buffer.from(JSON.stringify(injectNow(body, now.text)));
+          const nowText = ownBody(cfg.aiSeesNumbers ? now.text : hideNumbers(now.text));   // 0.1.15：AI_SEES_NUMBERS=false 时把数换成说法；身体那行写明是 TA 自己的
+          outBody = Buffer.from(JSON.stringify(injectNow(body, nowText)));
           state.markAttached(now.digest);
-          attachedNow = now.text;
-          log('now-attach', true, { chars: now.text.length });
+          attachedNow = nowText;
+          log('now-attach', true, { chars: nowText.length, nums: cfg.aiSeesNumbers ? undefined : 'hidden' });
         }
       }
     }

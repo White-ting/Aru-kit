@@ -458,3 +458,19 @@ export function replyToolText(tools, names) {
   }
   return { said, other };
 }
+
+
+/**
+ * 0.1.15：AI_SEES_NUMBERS=false 时，发给 TA 的此刻把数换成说法。心潮念给的此刻本来就不带小数（有小数整块不给），
+ * 会出现的数只有「身体：心跳 72，…」这一个跟身体有关的，按心潮念自己的分档（pulse.js heartLabel）换成偏慢 / 平稳 / 偏快 / 很快。
+ * 「匣子里 3 条」这种是条数，不是情绪的数，不动。
+ */
+export function hideNumbers(text) {
+  const label = (n) => (n < 60 ? '偏慢' : n < 86 ? '平稳' : n < 106 ? '偏快' : '很快');
+  return String(text || '').replace(/心跳\s*(\d{1,3})(?!\d)/g, (m, n) => '心跳' + label(Number(n)));
+}
+
+/** 0.1.15：脉那行「身体：心跳…」写明是 TA 自己的（Ting：不然 TA 可能当成她的心跳）。不管开关开没开都写。 */
+export function ownBody(text) {
+  return String(text || '').replace(/^身体：/m, '身体（你自己的）：');
+}
