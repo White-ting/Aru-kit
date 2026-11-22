@@ -35,7 +35,13 @@ export function classifyLast(body, format) {
   }
   // anthropic：工具结果是放在 user 消息里的 tool_result 块
   if (last.role === 'user') {
-    if (Array.isArray(last.content) && last.content.some((b) => b && b.type === 'tool_result')) return { kind: 'tool' };
+    if (Array.isArray(last.content) && last.content.some((b) => b && b.type === 'tool_result')) {
+      // 0.1.14：Aru 的语音条——TA 调 generateVoice 以后不接着发，等她回话时把「语音回执 + <environment> + 她的话」放在同一条里（测试者 DEBUG_SHAPE=3 日志）。
+      // 回执旁边有文字块的先当她在说话；去掉附注一个字不剩的，后面照旧当工具回合（toolBeforeTail）
+      const t = contentText(last.content);
+      if (t.trim()) return { kind: 'user', text: t, withResult: true };
+      return { kind: 'tool' };
+    }
     return { kind: 'user', text: contentText(last.content) };
   }
   return { kind: 'other' };
@@ -183,28 +189,32 @@ export function injectNow(body, text) {
 
 /** 非流式回复：取出文字、看是不是工具调用。 */
 export function finalFromJson(json, format) {
-  if (!json || typeof json !== 'object') return { text: '', toolCall: false };
+  if (!json || typeof json !== 'object') return { text: '', toolCall: false, tools: [] };
   if (format === 'openai') {
     const c = Array.isArray(json.choices) ? json.choices[0] : null;
-    if (!c) return { text: '', toolCall: false };
+    if (!c) return { text: '', toolCall: false, tools: [] };
     const msg = c.message || {};
     const toolCall = c.finish_reason === 'tool_calls' || c.finish_reason === 'function_call'
       || (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) || !!msg.function_call;
-    return { text: contentText(msg.content), toolCall };
+    const tools = (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).map((t) => ({ name: String((t && t.function && t.function.name) || ''), args: String((t && t.function && t.function.arguments) || '') }));
+    return { text: contentText(msg.content), toolCall, tools };
   }
   const blocks = Array.isArray(json.content) ? json.content : [];
   const toolCall = json.stop_reason === 'tool_use' || blocks.some((b) => b && b.type === 'tool_use');
-  return { text: contentText(blocks), toolCall };
+  const tools = blocks.filter((b) => b && b.type === 'tool_use').map((b) => ({ name: String(b.name || ''), args: JSON.stringify(b.input || {}) }));
+  return { text: contentText(blocks), toolCall, tools };
 }
 
 /**
  * 流式回复的拼接器：喂进原始字节，自己切 SSE 的行，把文字拼起来。
  * 只读，不改任何东西；转给 App 的仍然是原始字节。
  */
+const TOOL_ARGS_CAP = 20000;
 export function makeStreamCollector(format) {
   const decoder = new TextDecoder('utf-8');
   let buf = '';
-  const st = { text: '', toolCall: false, done: false };
+  const st = { text: '', toolCall: false, done: false, tools: [] };   // 0.1.14：tools = [{ name, args }]，args 是拼起来的 JSON 文字
+  const toolAt = new Map();   // 块序号 → tools 里的那一项
 
   function onData(line) {
     if (line === '[DONE]') { st.done = true; return; }
@@ -218,10 +228,27 @@ export function makeStreamCollector(format) {
         const d = c.delta || {};
         if (typeof d.content === 'string') st.text += d.content;
         if ((Array.isArray(d.tool_calls) && d.tool_calls.length) || d.function_call) st.toolCall = true;
+        if (Array.isArray(d.tool_calls)) for (const t of d.tool_calls) {
+          if (!t || typeof t !== 'object') continue;
+          const k = Number.isInteger(t.index) ? t.index : 0;
+          let x = toolAt.get(k); if (!x) { x = { name: '', args: '' }; toolAt.set(k, x); st.tools.push(x); }
+          if (t.function && typeof t.function.name === 'string') x.name += t.function.name;
+          if (t.function && typeof t.function.arguments === 'string' && x.args.length < TOOL_ARGS_CAP) x.args += t.function.arguments;
+        }
         if (c.finish_reason === 'tool_calls' || c.finish_reason === 'function_call') st.toolCall = true;
       }
     } else {
-      if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') st.toolCall = true;
+      if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') {
+        st.toolCall = true;
+        const x = { name: String(ev.content_block.name || ''), args: '' };
+        const inp = ev.content_block.input;
+        if (inp && typeof inp === 'object' && Object.keys(inp).length) x.args = JSON.stringify(inp);
+        toolAt.set(ev.index, x); st.tools.push(x);
+      }
+      if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'input_json_delta' && typeof ev.delta.partial_json === 'string') {
+        const x = toolAt.get(ev.index);
+        if (x && x.args.length < TOOL_ARGS_CAP) x.args += ev.delta.partial_json;
+      }
       if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string') st.text += ev.delta.text;
       if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason === 'tool_use') st.toolCall = true;
       if (ev.type === 'message_stop') st.done = true;
@@ -347,8 +374,87 @@ export function tailUserTexts(body, format) {
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
     if (!m || m.role !== 'user') break;
-    if (format === 'anthropic' && Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')) break;
+    if (format === 'anthropic' && Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')) {
+      if (i === msgs.length - 1) out.unshift(contentText(m.content));   // 0.1.14：只拿文字块，不拿回执
+      break;
+    }
     out.unshift(contentText(m.content));
   }
   return out;
+}
+
+/**
+ * 调试用（0.1.13，DEBUG_SHAPE=3）：最后几条消息「每一块」是什么，查语音条（测试者 11-22 日志：45 次隔一分钟以上的回合被当成工具回合）。
+ * 每条一行：r 是谁（u 她 a TA t 工具 s 系统），b1、b2… 是每一块：
+ *   文字 text:字数；工具调用 use:工具名；工具回执 res:回执里每块的类型和字数（err 表示出错）；图 image。
+ * 工具调用的字段另起 f1.1、f1.2…（第几个工具.第几个字段）：字段名=字数（不是文字的写类型），最多 8 个。不记任何内容、不记字段的值。
+ * 文字块和回执里的文字另记骨架（跟 DEBUG_SHAPE=2 一样：标签名照写、文字只留字数），sk1…，只看最后一条。
+ */
+export function describeTail(body, format, n = 4) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  const role = (r) => ({ system: 's', developer: 's', user: 'u', assistant: 'a', tool: 't', function: 't' })[r] || '?';
+  const fieldsOf = (input) => {
+    let o = input;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch { return ['str' + charLen(o)]; } }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return [typeof o];
+    return Object.entries(o).slice(0, 8).map(([k, v]) => `${String(k).slice(0, 24)}=${typeof v === 'string' ? charLen(v) : Array.isArray(v) ? 'arr' : typeof v}`);
+  };
+  const resOf = (c) => {
+    if (typeof c === 'string') return 'text' + charLen(c);
+    if (!Array.isArray(c)) return c == null ? '0' : typeof c;
+    return c.map((p) => (p && p.type === 'text' ? 'text' + charLen(p.text) : String((p && p.type) || '?').slice(0, 8))).join('+') || '0';
+  };
+  const out = [];
+  const start = Math.max(0, msgs.length - n);
+  for (let i = start; i < msgs.length; i++) {
+    const m = msgs[i] || {};
+    const row = { at: i - msgs.length, r: role(m.role) };
+    const blocks = [], fields = [], texts = [];
+    const c = m.content;
+    if (typeof c === 'string') { blocks.push('text:' + charLen(c)); texts.push(c); }
+    else if (Array.isArray(c)) {
+      for (const b of c) {
+        if (!b || typeof b !== 'object') { blocks.push('?'); continue; }
+        if (b.type === 'text') { blocks.push('text:' + charLen(b.text)); texts.push(String(b.text || '')); }
+        else if (b.type === 'tool_use') { blocks.push('use:' + String(b.name || '?').slice(0, 30)); fields.push(fieldsOf(b.input)); }
+        else if (b.type === 'tool_result') {
+          blocks.push('res:' + resOf(b.content) + (b.is_error ? ':err' : ''));
+          if (typeof b.content === 'string') texts.push(b.content);
+          else if (Array.isArray(b.content)) for (const p of b.content) if (p && p.type === 'text') texts.push(String(p.text || ''));
+        } else blocks.push(String(b.type || '?').slice(0, 12));
+      }
+    } else if (c != null) blocks.push(typeof c);
+    // openai 的工具调用和工具结果
+    if (Array.isArray(m.tool_calls)) for (const t of m.tool_calls) { blocks.push('use:' + String((t && t.function && t.function.name) || '?').slice(0, 30)); fields.push(fieldsOf(t && t.function && t.function.arguments)); }
+    if (m.role === 'tool' || m.role === 'function') blocks[0] = 'res:' + (blocks[0] || '0');
+    blocks.forEach((x, k) => { row['b' + (k + 1)] = x; });
+    fields.forEach((list, k) => list.forEach((x, j) => { row[`f${k + 1}.${j + 1}`] = x; }));
+    out.push(row);
+    if (i === msgs.length - 1) {
+      const { head } = skeleton(texts.join('⏎|⏎'));
+      const parts = head.match(/[\s\S]{1,40}/gu) || [];
+      if (parts.length) out.push(Object.fromEntries(parts.slice(0, 4).map((x, k) => ['sk' + (k + 1), x])));
+    }
+  }
+  return out;
+}
+
+
+/**
+ * 0.1.14：TA 用工具「说」的话（Aru 的语音条 generateVoice 的 text）。names 是工具名单（小写比），
+ * 每个工具取 text 字段；没有 text 的取最长的那个文字字段。返回 { said: [文字…], other: 有没有名单外的工具 }。
+ */
+export function replyToolText(tools, names) {
+  const said = [];
+  let other = false;
+  for (const t of Array.isArray(tools) ? tools : []) {
+    if (!t || !names.includes(String(t.name || '').toLowerCase())) { other = true; continue; }
+    let o = null;
+    try { o = JSON.parse(t.args || '{}'); } catch { o = null; }
+    if (!o || typeof o !== 'object') continue;
+    let v = typeof o.text === 'string' ? o.text : '';
+    if (!v) for (const x of Object.values(o)) if (typeof x === 'string' && x.length > v.length) v = x;
+    if (v.trim()) said.push(v.trim());
+  }
+  return { said, other };
 }

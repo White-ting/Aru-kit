@@ -7,7 +7,7 @@ import { makeLogger } from './log.mjs';
 import { GatewayState } from './state.mjs';
 import { makeXinchao } from './xinchao.mjs';
 import {
-  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, stripLeadMeta, appNoteKind,
+  classifyLast, startsWithSkip, looksBackground, gateCheck, injectNow, finalFromJson, makeStreamCollector, describeShape, stripAnnotations, skeleton, tailUserTexts, toolBeforeTail, describeTail, replyToolText, stripLeadMeta, appNoteKind,
 } from './turn.mjs';
 
 const HOP_BY_HOP = new Set([
@@ -197,6 +197,7 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
     let gap = Infinity;
     let outBody = raw;
     let body = null;
+    let attachedNow = '';   // 0.1.14：这一句附上的此刻，TA 接着调工具时那几次也带上
     if (format && raw && raw.length) {
       try { body = JSON.parse(raw.toString('utf8')); } catch { body = null; }
     }
@@ -238,6 +239,8 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         && (!cfg.onlyStream || body.stream === true);
       if (turn.kind === 'user' && !isHer) log('turn', true, { kind: bg ? 'background' : 'skip', why: annoOnly ? 'annotation' : external ? 'external' : (bg || undefined) });
       if (turn.kind === 'tool') log('turn', true, { kind: 'tool', after: turn.after });
+      // 0.1.13 调试（DEBUG_SHAPE=3）：她说话和工具回合都记最后 4 条每一块是什么，不记内容（查语音条被当成工具回合）
+      if (cfg.debugShape >= 3 && (turn.kind === 'tool' || turn.kind === 'user')) for (const row of describeTail(body, format)) log('msg', true, row);
     }
     if (isHer) {
       herText = turn.said;
@@ -247,7 +250,7 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
       if (cfg.debugShape) {
         for (const line of describeShape(body)) log('shape', true, line);
         log('shape', true, { clean: Array.from(herText).length, raw: Array.from(turn.rawTurn || turn.text).length, n: parts.length || 1 });   // 去掉附注后几个字 / 原来几个字 / 这一轮她发了几条
-        if (cfg.debugShape === 2) {
+        if (cfg.debugShape >= 2) {
           // 日志每个字段最多 40 个字，骨架切成几段记
           const { head, tail } = skeleton(turn.text);
           const cut40 = (s, pre) => Object.fromEntries((Array.from(s).join('').match(/[\s\S]{1,40}/gu) || []).map((x, k) => [pre + (k + 1), x]));
@@ -269,8 +272,18 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         } else {
           outBody = Buffer.from(JSON.stringify(injectNow(body, now.text)));
           state.markAttached(now.digest);
+          attachedNow = now.text;
           log('now-attach', true, { chars: now.text.length });
         }
+      }
+    }
+
+    // 0.1.14：TA 调完工具再发的那一次，把她那句附上的此刻再带上（不然 TA 写回复时看不到；Aru 存的记录里没有此刻）
+    if (!isHer && turn.kind === 'tool' && body && cfg.nowEnabled) {
+      const p = state.pendingTool;
+      if (p && p.now && clock() - p.at <= PENDING_TOOL_MAX_MS) {
+        outBody = Buffer.from(JSON.stringify(injectNow(body, p.now)));
+        log('now-attach', true, { chars: p.now.length, again: 1 });
       }
     }
 
@@ -328,12 +341,19 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
 
     function afterReply(final) {
       // ---------- 第 3 根线：回传 ----------
-      if (final.toolCall) {
-        if (isHer) state.pendingTool = { her: herText, gap, at: clock() };
+      // 0.1.14：TA 用「说话的工具」（REPLY_TOOLS，默认 Aru 的 generateVoice）说的话也算回话。
+      // 只调了这类工具 = 这一轮说完了（Aru 不会接着发，要等她回话），马上回传；还调了别的工具 = 照旧等工具走完，说过的先记着。
+      const { said, other } = replyToolText(final.tools, cfg.replyTools);
+      if (said.length) log('reply-tool', true, { n: said.length, chars: said.join('').length });
+      const joined = (list) => [final.text, ...list].map((x) => String(x || '').trim()).filter(Boolean).join('\n');
+      if (final.toolCall && other) {
+        if (isHer) state.pendingTool = { her: herText, gap, at: clock(), said: [], now: attachedNow };
+        const p = state.pendingTool;
+        if (p) { if (final.text && final.text.trim()) p.said.push(final.text.trim()); p.said.push(...said); }
         log('event', 'wait', { why: 'tool-calls' });
         return;
       }
-      if (isHer) { maybeSendEvent(herText, final.text, gap); return; }
+      if (isHer) { maybeSendEvent(herText, joined(said), gap); return; }
       if (turn.kind === 'tool') {
         // 工具调用走完了：把她那句和最后的回复配成一轮回传。
         // 0.1.3 起不再要求记录里她那句跟当时一字不差：Aru 每次往她那句里塞的东西都不一样，一比就对不上（测试反馈 ca3e）。
@@ -342,7 +362,7 @@ export function createGateway({ cfg, clock = () => Date.now(), log = makeLogger(
         if (!p) { log('event', 'skip', { why: 'tool-no-pending' }); return; }
         state.pendingTool = null;
         if (clock() - p.at > PENDING_TOOL_MAX_MS) { log('event', 'skip', { why: 'tool-expired' }); return; }
-        maybeSendEvent(p.her, final.text, p.gap);
+        maybeSendEvent(p.her, [...p.said, joined(said)].filter(Boolean).join('\n'), p.gap);
       }
     }
 

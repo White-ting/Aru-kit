@@ -60,6 +60,7 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
   const skip = get('SKIP_PREFIXES');
   const bgp = get('BG_PATTERNS');
   const toolp = get('TOOL_PREFIXES');
+  const rtools = get('REPLY_TOOLS');
 
   return {
     port: num(get('PORT'), 8790),
@@ -85,6 +86,8 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
     skipPrefixes: (skip === undefined || skip === null ? '【|〔心潮念' : String(skip)).split('|').filter(Boolean),
     // 0.1.11：这些开头的 user 消息是工具结果（Aru 把工具取回的图另起一条 user 发），当工具回合配对，不当她说话
     toolPrefixes: (toolp === undefined || toolp === null ? 'Images returned by|Tool result|Tool output' : String(toolp)).split('|').map((x) => x.trim()).filter(Boolean),
+    // 0.1.14：TA 用来「说话」的工具（Aru 的语音条是 generateVoice），里面的 text 算 TA 的回话一起回传。| 分隔，不分大小写；留空 = 不算
+    replyTools: (rtools === undefined || rtools === null ? 'generateVoice' : String(rtools)).split('|').map((x) => x.trim().toLowerCase()).filter(Boolean),
     nowEnabled: bool(get('NOW_ENABLED'), true),
     eventEnabled: bool(get('EVENT_ENABLED'), true),
     onlyStream: bool(get('ONLY_STREAM'), false),
@@ -101,7 +104,8 @@ export function loadConfig({ baseDir = process.cwd(), env = process.env, envFile
     eventMaxPerHour: num(get('EVENT_MAX_PER_HOUR'), 4),
     // 调试（0.1.3）：只在日志里记她那句话的结构（分几块、每段多长、有哪些 <标签>），不记正文。测完关掉。
     // 2（0.1.5）= 再多记她那句话的「骨架」：标签名照写、属性值遮成 …、文字只留字数（·26），看附注是怎么写的
-    debugShape: String(get('DEBUG_SHAPE') ?? '').trim() === '2' ? 2 : (bool(get('DEBUG_SHAPE'), false) ? 1 : 0),
+    // 3（0.1.13）= 再多记最后 4 条消息每一块是什么（文字几个字、调了哪个工具、工具的字段名和字数、回执的类型和字数），工具回合也记。查语音条
+    debugShape: (() => { const v = String(get('DEBUG_SHAPE') ?? '').trim(); return v === '3' ? 3 : v === '2' ? 2 : (bool(v, false) ? 1 : 0); })(),
     maxBodyBytes: Math.round(num(get('MAX_BODY_MB'), 20) * 1024 * 1024),
     stateDir,
     logLevel: get('LOG_LEVEL') || 'info',

@@ -33,9 +33,9 @@ test('SSE 拼接：\\r\\n、切开的汉字、多个 choice 只取第 0 个', ()
 });
 
 test('finalFromJson', () => {
-  assert.deepEqual(finalFromJson({ choices: [{ message: { content: 'x' }, finish_reason: 'stop' }] }, 'openai'), { text: 'x', toolCall: false });
+  assert.deepEqual(finalFromJson({ choices: [{ message: { content: 'x' }, finish_reason: 'stop' }] }, 'openai'), { text: 'x', toolCall: false, tools: [] });
   assert.equal(finalFromJson({ choices: [{ message: { content: null, tool_calls: [{}] }, finish_reason: 'tool_calls' }] }, 'openai').toolCall, true);
-  assert.deepEqual(finalFromJson({ content: [{ type: 'text', text: 'a' }], stop_reason: 'end_turn' }, 'anthropic'), { text: 'a', toolCall: false });
+  assert.deepEqual(finalFromJson({ content: [{ type: 'text', text: 'a' }], stop_reason: 'end_turn' }, 'anthropic'), { text: 'a', toolCall: false, tools: [] });
   assert.equal(finalFromJson({ content: [{ type: 'tool_use' }], stop_reason: 'tool_use' }, 'anthropic').toolCall, true);
 });
 
