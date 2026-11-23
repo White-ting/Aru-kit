@@ -190,7 +190,9 @@ export function evaluate(ev, ctx) {
 // 没碰到规则、但差一点：交给小模型看。返回一句描述或 null
 export function nearMiss(ev, ctx) {
   const c = ctx.config, t = localParts(ev.ts, c.tz);
-  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx) && ctx.sessionMin >= c.long_session.minutes * 0.6) {
+  // v2.3.1：同一段只算一次「差一点」（几个 App 接成一段后，每关一次 App 都会到这里，不拦会一直问小模型）
+  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx)
+    && (ctx.state || {}).near_since !== ctx.sessionSince && ctx.sessionMin >= c.long_session.minutes * 0.6) {
     return `${sessionWhere(ev, ctx)}${Math.round(ctx.sessionMin)} 分钟（规则是 ${c.long_session.minutes} 分钟）`;
   }
   if (ev.type === "app_open" && c.late_night.enabled && inHours(t.hour, (c.late_night.from + 23) % 24, c.late_night.from)) {

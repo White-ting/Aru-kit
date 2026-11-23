@@ -1,4 +1,4 @@
-// knock 守门人 v2.3（2026-11-23）· White-ting · 构建 dev
+// knock 守门人 v2.3.1（2026-11-23）· White-ting · 构建 dev
 // 原版在 github.com/White-ting/Aru-kit。合成的单文件，别直接改这里，改 src/ 再跑 python3 build.py
 // 使用权限：可以自己部署、自己改着用；不许转给别人或传到别处（分享请给 github.com/White-ting/Aru-kit）；不许商用。
 // 全文见 LICENSE。其中「seal.js」一段改写自 aru-host 的 wake-send.mjs（https://github.com/Aevella/aru-host），照 Apache-2.0（不受上面限制），见 LICENSE-APACHE。
@@ -196,7 +196,9 @@ function evaluate(ev, ctx) {
 // 没碰到规则、但差一点：交给小模型看。返回一句描述或 null
 function nearMiss(ev, ctx) {
   const c = ctx.config, t = localParts(ev.ts, c.tz);
-  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx) && ctx.sessionMin >= c.long_session.minutes * 0.6) {
+  // v2.3.1：同一段只算一次「差一点」（几个 App 接成一段后，每关一次 App 都会到这里，不拦会一直问小模型）
+  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx)
+    && (ctx.state || {}).near_since !== ctx.sessionSince && ctx.sessionMin >= c.long_session.minutes * 0.6) {
     return `${sessionWhere(ev, ctx)}${Math.round(ctx.sessionMin)} 分钟（规则是 ${c.long_session.minutes} 分钟）`;
   }
   if (ev.type === "app_open" && c.late_night.enabled && inHours(t.hour, (c.late_night.from + 23) % 24, c.late_night.from)) {
@@ -632,7 +634,7 @@ async function askModel(env, config, messages) {
 // 规则没碰到的，交给小模型看一眼（定时、或者事件"差一点"碰到规则时），它说叫也照样要过硬底线
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-const VERSION = "2.3", RELEASED = "2026-11-23", BUILD = "dev";
+const VERSION = "2.3.1", RELEASED = "2026-11-23", BUILD = "dev";
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 
@@ -982,6 +984,8 @@ async function handleEvent(req, env, ectx, received) {
   }
   // 没碰到规则、但差一点：回完快捷指令再让小模型看（不让手机等）
   const near = !hit && config.model.enabled && !state.asleep && !quietReason(state, received, config.tz) ? nearMiss(ev, ctx) : null;
+  if (near && ev.type === "app_close" && ctx.sessionSince != null)   // 记下这一段问过了，同一段不再问
+    await changeState(db, s => ({ state: { ...s, near_since: ctx.sessionSince } }));
   if (near) {
     const job = modelCheck(env, "差一点：" + near, { now: received });
     if (ectx && ectx.waitUntil) ectx.waitUntil(job); else await job;

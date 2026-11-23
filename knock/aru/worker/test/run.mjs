@@ -149,6 +149,18 @@ await admin("/config", "PUT", { cooldown_min: 30 });
   x = await go("21:45", "app_close", "小红书");
   check("跨 App：apps 名单外的微信不算，抖音 + 小红书 隔了 6 分钟断开", x.wake === false, JSON.stringify(x));
   check("gap_min 超范围被拒", (await m.adminRaw("/config", "PUT", { long_session: { gap_min: 99 } })).status === 400);
+  // v2.3.1：几个 App 接成一段后，「差一点」同一段只问一次小模型
+  let asks = 0;
+  const q = mk({ AI: { async run() { asks++; return { response: '{"wake": false, "reason": "先不叫"}' }; } } });
+  await q.admin("/config", "PUT", { long_session: { minutes: 40 }, model: { enabled: true, from: 0, to: 24 }, cooldown_min: 0 });
+  const hm = min => `${String(10 + Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+  for (let i = 0; i < 36; i += 3) {   // 10:00 起每 3 分钟切一次 QQ / 微信，一直刷到 10:36（还没满 40）
+    const app = i % 2 ? "微信" : "QQ";
+    await q.sendAt(hm(i), { type: "app_open", app }); await q.sendAt(hm(i + 2), { type: "app_close", app });
+  }
+  check("差一点：同一段刷 24～40 分钟之间只问一次小模型", asks === 1, `问了 ${asks} 次`);
+  await q.sendAt("11:00", { type: "app_open", app: "QQ" }); await q.sendAt("11:30", { type: "app_close", app: "QQ" });
+  check("差一点：放下手机后重新开始的一段再问", asks === 2, `问了 ${asks} 次`);
   clock = keepClock;   // 别影响后面用全局时钟的测试
 }
 
