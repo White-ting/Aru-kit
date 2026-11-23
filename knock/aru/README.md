@@ -65,7 +65,7 @@ npx wrangler deploy
   "cooldown_min": 60,
   "late_night": { "enabled": true, "from": 1, "to": 5, "once_per_night": true },
   "places": { "enabled": true, "watch": ["医院"] },
-  "long_session": { "enabled": true, "minutes": 120, "apps": [] },
+  "long_session": { "enabled": true, "minutes": 120, "apps": [], "gap_min": 5, "once": true },
   "model": { "enabled": false, "style": "少叫", "every_min": 30, "from": 9, "to": 23, "daily_cap": 2, "name": "" }
 }
 ```

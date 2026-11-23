@@ -7,7 +7,7 @@ import { submitWakeEvent } from "./seal.js";
 import { buildMessages, parseDecision, askModel } from "./model.js";
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-export const VERSION = "2.2.2", RELEASED = "2026-11-20", BUILD = "dev";
+export const VERSION = "2.3", RELEASED = "2026-11-23", BUILD = "dev";
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 
@@ -161,16 +161,42 @@ async function storeEvent(db, ev, config, received) {
   return r ? null : min;
 }
 
-// app_close 时算这次在这个 App 里待了几分钟：最近一次打开它、且之后没关过。
-// 快捷指令没带 App 名字的（常见：用了"快捷指令输入"变量，自动化跑的时候是空的），没名字的打开和关掉也配成一对
-async function sessionMinutes(db, ev) {
+// app_close 时算这次连着用了几分钟。先找这个 App 自己最近一次打开、且之后没关过（找不到就不算）。
+// 快捷指令没带 App 名字的（常见：用了"快捷指令输入"变量，自动化跑的时候是空的），没名字的打开和关掉也配成一对。
+// v2.3（11-23）：再往前接——别的 App 关掉后 gap_min 分钟内又开了下一个，就算同一段，从这一串最早那次打开算起。
+// 只往前看 12 小时；打开了没等到关掉的，只算打开那一刻（防止漏报的一次打开把好几个小时都接上）
+async function sessionMinutes(db, ev, ls = {}) {
   if (ev.type !== "app_close") return null;
   const same = ev.app ? "app = ?" : "app IS NULL", args = ev.app ? [ev.app] : [];
   const open = await db.prepare(`SELECT ts FROM events WHERE type = 'app_open' AND ${same} AND ts <= ? ORDER BY ts DESC LIMIT 1`).bind(...args, ev.ts).first();
   if (!open) return null;
   const closed = await db.prepare(`SELECT ts FROM events WHERE type = 'app_close' AND ${same} AND ts > ? AND ts < ? LIMIT 1`).bind(...args, open.ts, ev.ts).first();
   if (closed) return null;
-  return (ev.ts - open.ts) / 60e3;
+  const gap = Number(ls.gap_min) > 0 ? Number(ls.gap_min) * 60e3 : 0;
+  let start = open.ts;
+  const apps = new Set([ev.app || ""]);
+  if (gap) {
+    const want = (ls.apps || []).filter(Boolean), counts = a => !want.length || want.some(w => String(a || "").includes(w));
+    // 查到这次关掉为止：切 App 时「关上一个」可能比「开这一个」晚到几秒，要把它也算进来
+    const rows = (await db.prepare("SELECT ts, type, app FROM events WHERE type IN ('app_open', 'app_close') AND ts >= ? AND ts <= ? ORDER BY ts, id")
+      .bind(ev.ts - 12 * 3600e3, ev.ts).all()).results;
+    const own = ev.app || "", opened = new Map(), spans = [];
+    for (const e of rows) {
+      const k = e.app || "";
+      if (k === own && e.ts >= open.ts) continue;   // 这一次本身已经算在 start 里
+      if (!counts(e.app)) continue;
+      if (e.type === "app_open") { if (opened.has(k)) spans.push([opened.get(k), opened.get(k), k]); opened.set(k, e.ts); }
+      else if (opened.has(k)) { spans.push([opened.get(k), e.ts, k]); opened.delete(k); }
+    }
+    for (const [k, t] of opened) spans.push([t, t, k]);
+    spans.sort((a, b) => b[1] - a[1]);   // 按结束时间从晚到早：接不上一段，更早的也接不上
+    for (const [s, e, k] of spans) {
+      if (e < start - gap) break;
+      if (s < start) start = s;
+      apps.add(k);
+    }
+  }
+  return { min: (ev.ts - start) / 60e3, apps: [...apps].filter(Boolean), since: start };
 }
 
 async function deliver(env, briefing, signal) {
@@ -320,7 +346,8 @@ async function handleEvent(req, env, ectx, received) {
   if (dup) return json({ ok: true, wake: false, skipped: `${dup} 分钟内已经记过一条同样的，这条不记` });
 
   const { state } = await changeState(db, state => ({ state: applyState(ev, state, config) }));
-  const ctx = { config, state, sessionMin: await sessionMinutes(db, ev) };
+  const sess = await sessionMinutes(db, ev, config.long_session);
+  const ctx = { config, state, sessionMin: sess ? sess.min : null, sessionApps: sess ? sess.apps : [], sessionSince: sess ? sess.since : null };
   const hit = evaluate(ev, ctx);
   let result = { ok: true, wake: false };
   if (hit) {

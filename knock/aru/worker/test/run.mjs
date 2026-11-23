@@ -100,6 +100,58 @@ await send({ type: "app_open", t: at("21:00") });
 r = await send({ type: "app_close", t: at("23:10") });
 check("快捷指令没带 App 名字，打开和关掉也能配对算时长", r.wake === true && r.rule === "long_session", r.outcome || r.blocked);
 await admin("/config", "PUT", { cooldown_min: 30 });
+
+// v2.3 几个 App 来回切也算连着刷（11-23 Ting）：关掉一个、5 分钟内开下一个就接上
+{
+  const keepClock = clock, m = mk();
+  await m.admin("/config", "PUT", { long_session: { minutes: 40 }, cooldown_min: 0 });
+  const go = (hm, type, app) => m.sendAt(hm, { type, app });
+  await go("10:00", "app_open", "抖音"); await go("10:20", "app_close", "抖音");
+  await go("10:22", "app_open", "小红书"); await go("10:35", "app_close", "小红书");
+  await go("10:36", "app_open", "微信");
+  let x = await go("10:45", "app_close", "微信");
+  check("跨 App：三个 App 加起来 45 分钟叫醒", x.wake === true && x.rule === "long_session", x.outcome || x.blocked);
+  const w = (await m.admin("/wakes"))[0];
+  check("跨 App：理由写出是哪几个 App、从头算的分钟", /在微信、小红书、抖音之间连着刷了 45 分钟/.test(w.reason), w.reason);
+  await go("10:47", "app_open", "推特");
+  x = await go("10:52", "app_close", "推特");
+  check("一段只敲一次：同一段接着刷（52 分钟）不再敲", x.wake === false && !x.rule, JSON.stringify(x));
+  await go("11:00", "app_open", "抖音"); await go("11:20", "app_close", "抖音");
+  await go("11:30", "app_open", "小红书");
+  x = await go("11:55", "app_close", "小红书");
+  check("跨 App：中间空了 10 分钟就断开，只算 25 分钟", x.wake === false && !x.rule, JSON.stringify(x));
+  // 切 App 时「关上一个」比「开这一个」晚到
+  await go("13:00", "app_open", "微博"); await go("13:30", "app_open", "淘宝"); await go("13:31", "app_close", "微博");
+  x = await go("13:45", "app_close", "淘宝");
+  check("跨 App：关上一个比开下一个晚到也接得上（45 分钟）", x.wake === true && /45 分钟/.test((await m.admin("/wakes"))[0].reason));
+  // 打开了没等到关掉的那一次不把几个小时都接上
+  await go("15:00", "app_open", "B站"); await go("17:00", "app_open", "知乎");
+  x = await go("17:20", "app_close", "知乎");
+  check("跨 App：漏报关掉的旧打开不算连着", x.wake === false, JSON.stringify(x));
+  // once 关掉：同一段冷却过了就再敲
+  await m.admin("/config", "PUT", { long_session: { minutes: 40, once: false } });
+  await go("18:00", "app_open", "抖音"); x = await go("18:41", "app_close", "抖音");
+  check("once 关掉：第一次满 40 分钟敲", x.wake === true, JSON.stringify(x));
+  await go("18:42", "app_open", "QQ"); x = await go("18:50", "app_close", "QQ");
+  check("once 关掉：同一段接着刷也再敲（冷却 0）", x.wake === true && x.rule === "long_session", JSON.stringify(x));
+  await m.admin("/config", "PUT", { long_session: { minutes: 40, once: true } });
+  // gap_min 0 = 只算单个 App（旧算法）
+  await m.admin("/config", "PUT", { long_session: { minutes: 40, gap_min: 0 } });
+  await go("19:00", "app_open", "抖音"); await go("19:30", "app_close", "抖音");
+  await go("19:31", "app_open", "小红书");
+  x = await go("19:50", "app_close", "小红书");
+  check("跨 App：gap_min 填 0 就只算这一个 App", x.wake === false, JSON.stringify(x));
+  // apps 填了只串名单里的
+  await m.admin("/config", "PUT", { long_session: { minutes: 40, gap_min: 5, apps: ["抖音", "小红书"] } });
+  await go("21:00", "app_open", "抖音"); await go("21:25", "app_close", "抖音");
+  await go("21:26", "app_open", "微信"); await go("21:30", "app_close", "微信");
+  await go("21:31", "app_open", "小红书");
+  x = await go("21:45", "app_close", "小红书");
+  check("跨 App：apps 名单外的微信不算，抖音 + 小红书 隔了 6 分钟断开", x.wake === false, JSON.stringify(x));
+  check("gap_min 超范围被拒", (await m.adminRaw("/config", "PUT", { long_session: { gap_min: 99 } })).status === 400);
+  clock = keepClock;   // 别影响后面用全局时钟的测试
+}
+
 const wakes = await admin("/wakes");
 const sent = wakes.filter(w => !String(w.outcome).startsWith("挡下"));
 check("记了 4 次叫醒", sent.length === 4, sent.map(w => w.rule).join(","));
@@ -191,10 +243,13 @@ check("叫醒记录里是小模型叫的", mw[0] && mw[0].rule === "model" && !/
 const mb = (await m.env.DB.prepare("SELECT briefing FROM wakes WHERE rule = 'model'").first()).briefing;
 check("简报写着小模型的理由、今天的摘要", mb.includes("守门人的小模型看了觉得——她在小红书里待了快一个半小时") && mb.includes("她今天："));
 
+// 关掉小红书 1 分钟后开抖音：v2.3 会接成一段（92 分钟）。这里要测的是「只待 1 分钟不算差一点」，先关掉接段
+await adminM("/config", "PUT", { long_session: { gap_min: 0 } });
 await sendM({ type: "app_open", app: "抖音", t: ago(4) });
 replies.push({ response: '{"wake": true, "reason": "又开了抖音"}' });
 await sendM({ type: "app_close", app: "抖音", t: ago(3) });   // 待了 1 分钟：不算差一点
 check("离规则还远的事件不问小模型", calls.length === 2);
+await adminM("/config", "PUT", { long_session: { gap_min: 5 } });
 replies.length = 0;
 
 clock += 1;

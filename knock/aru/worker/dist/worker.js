@@ -1,4 +1,4 @@
-// knock 守门人 v2.2.2（2026-11-20）· White-ting · 构建 dev
+// knock 守门人 v2.3（2026-11-23）· White-ting · 构建 dev
 // 原版在 github.com/White-ting/Aru-kit。合成的单文件，别直接改这里，改 src/ 再跑 python3 build.py
 // 使用权限：可以自己部署、自己改着用；不许转给别人或传到别处（分享请给 github.com/White-ting/Aru-kit）；不许商用。
 // 全文见 LICENSE。其中「seal.js」一段改写自 aru-host 的 wake-send.mjs（https://github.com/Aevella/aru-host），照 Apache-2.0（不受上面限制），见 LICENSE-APACHE。
@@ -15,7 +15,10 @@ const DEFAULT_CONFIG = {
   cooldown_min: 60,        // 两次叫醒至少隔多久（硬底线）
   late_night: { enabled: true, from: 1, to: 5, once_per_night: true },
   places: { enabled: true, watch: [] },                       // 到达/离开这些地方叫醒，比如 ["医院"]
-  long_session: { enabled: true, minutes: 120, apps: [] },    // 在某个 App 里待太久；apps 空 = 全部
+  // 刷太久：连着用手机超过 minutes 分钟。apps 空 = 全部 App 都算。
+  // gap_min（v2.3）：关掉一个 App、这么多分钟内又打开下一个，就接成同一段，几个 App 来回切也算连着刷；0 = 只算单个 App
+  // once（v2.3）：一段只敲一次——放下手机超过 gap_min 分钟、重新开始一段，满了才再敲；false = 冷却过了就再敲
+  long_session: { enabled: true, minutes: 120, apps: [], gap_min: 5, once: true },
   // 小模型：规则管不到的时候替 TA 看一眼。from–to 点之间每 every_min 分钟看一次，事件"差一点"碰到规则时也看
   model: { enabled: false, style: "少叫", every_min: 30, from: 9, to: 23, daily_cap: 2, name: "" },   // style：少叫 / 适中 / 多叫
   // 心情（快捷指令菜单里她自己点的）：想独处 → 这几小时不叫；想聊天 → 直接叫醒 TA（冷却比平常短，每天上限照样算）
@@ -72,6 +75,7 @@ function validateConfig(body) {
     [body.model, "daily_cap", "model.daily_cap", v => range(v, 0, 20, true), "0–20 的整数"],
     [body.model, "every_min", "model.every_min", v => range(v, 10, 1440), "10–1440 之间的分钟数"],
     [body.long_session, "minutes", "long_session.minutes", positive, "大于 0 的分钟数"],
+    [body.long_session, "gap_min", "long_session.gap_min", v => range(v, 0, 60), "0–60 之间的分钟数（0 = 只算单个 App）"],
     [body.mood, "cooldown_min", "mood.cooldown_min", positive, "大于 0 的分钟数"],
     [body.mood, "alone_hours", "mood.alone_hours", positive, "大于 0 的小时数"],
     [body.mood, "keep_hours", "mood.keep_hours", positive, "大于 0 的小时数"],
@@ -144,8 +148,21 @@ function inHours(h, from, to) {
   return from <= to ? h >= from && h < to : h >= from || h < to;
 }
 
+// 这一段已经因为刷太久敲过了（一段只敲一次）：同一段的起点不变，敲过就记在状态里
+function stretchDone(ctx) {
+  return ctx.config.long_session.once !== false && ctx.sessionSince != null && (ctx.state || {}).long_session_since === ctx.sessionSince;
+}
+
+// 刷太久那句话的开头：只在一个 App 里是「在「抖音」里待了」，几个 App 接起来是「在抖音、小红书之间连着刷了」
+function sessionWhere(ev, ctx) {
+  const apps = (ctx.sessionApps || []).filter(Boolean);
+  if (apps.length > 1) return `在${apps.slice(0, 4).join("、")}${apps.length > 4 ? "等" : ""}之间连着刷了 `;
+  return `在「${ev.app || "手机"}」里待了 `;
+}
+
 // 一条事件进来，看哪条规则想叫醒它。返回 {rule, reason} 或 null。
-// ctx: { config, state, sessionMin }  sessionMin = app_close 时算出的这次待了几分钟
+// ctx: { config, state, sessionMin, sessionApps, sessionSince }  sessionMin = app_close 时算出的这次连着用了几分钟，
+// sessionApps = 这一段里用过的 App，sessionSince = 这一段从几点开始（毫秒）
 function evaluate(ev, ctx) {
   const c = ctx.config, t = localParts(ev.ts, c.tz);
   if (ev.type === "mood" && ev.data.mood === "need_company" && c.mood.request) {
@@ -158,10 +175,10 @@ function evaluate(ev, ctx) {
     const hit = (c.places.watch || []).find(w => w && String(ev.place).includes(w));
     if (hit) return { rule: "place", reason: `${t.hm} ${ev.type === "arrive" ? "到了" : "离开了"}「${ev.place}」` };
   }
-  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null) {
+  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx)) {
     const apps = c.long_session.apps || [];
     if (ctx.sessionMin >= c.long_session.minutes && (!apps.length || apps.some(a => String(ev.app || "").includes(a)))) {
-      return { rule: "long_session", reason: `在「${ev.app || "手机"}」里待了 ${Math.round(ctx.sessionMin)} 分钟（到 ${t.hm}）` };
+      return { rule: "long_session", since: ctx.sessionSince, reason: `${sessionWhere(ev, ctx)}${Math.round(ctx.sessionMin)} 分钟（到 ${t.hm}）` };
     }
   }
   // 小报告：开关打开的才叫；声音只认 wake_kinds 里的几种
@@ -179,8 +196,8 @@ function evaluate(ev, ctx) {
 // 没碰到规则、但差一点：交给小模型看。返回一句描述或 null
 function nearMiss(ev, ctx) {
   const c = ctx.config, t = localParts(ev.ts, c.tz);
-  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && ctx.sessionMin >= c.long_session.minutes * 0.6) {
-    return `在「${ev.app || "手机"}」里待了 ${Math.round(ctx.sessionMin)} 分钟（规则是 ${c.long_session.minutes} 分钟）`;
+  if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx) && ctx.sessionMin >= c.long_session.minutes * 0.6) {
+    return `${sessionWhere(ev, ctx)}${Math.round(ctx.sessionMin)} 分钟（规则是 ${c.long_session.minutes} 分钟）`;
   }
   if (ev.type === "app_open" && c.late_night.enabled && inHours(t.hour, (c.late_night.from + 23) % 24, c.late_night.from)) {
     return `${t.hm} 还在用「${ev.app || "手机"}」（熬夜规则从 ${c.late_night.from} 点算）`;
@@ -267,6 +284,7 @@ function afterWake(hit, ev, ctx) {
   s.wakes_date = today;
   s.last_wake_ts = ts;
   if (hit.rule === "late_night") s.late_night_key = nightKey(ts, c.tz);
+  if (hit.rule === "long_session" && hit.since != null) s.long_session_since = hit.since;
   if (hit.rule === "model") {
     s.model_count = (s.model_date === today ? (s.model_count || 0) : 0) + 1;
     s.model_date = today;
@@ -614,7 +632,7 @@ async function askModel(env, config, messages) {
 // 规则没碰到的，交给小模型看一眼（定时、或者事件"差一点"碰到规则时），它说叫也照样要过硬底线
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-const VERSION = "2.2.2", RELEASED = "2026-11-20", BUILD = "dev";
+const VERSION = "2.3", RELEASED = "2026-11-23", BUILD = "dev";
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 
@@ -768,16 +786,42 @@ async function storeEvent(db, ev, config, received) {
   return r ? null : min;
 }
 
-// app_close 时算这次在这个 App 里待了几分钟：最近一次打开它、且之后没关过。
-// 快捷指令没带 App 名字的（常见：用了"快捷指令输入"变量，自动化跑的时候是空的），没名字的打开和关掉也配成一对
-async function sessionMinutes(db, ev) {
+// app_close 时算这次连着用了几分钟。先找这个 App 自己最近一次打开、且之后没关过（找不到就不算）。
+// 快捷指令没带 App 名字的（常见：用了"快捷指令输入"变量，自动化跑的时候是空的），没名字的打开和关掉也配成一对。
+// v2.3（11-23）：再往前接——别的 App 关掉后 gap_min 分钟内又开了下一个，就算同一段，从这一串最早那次打开算起。
+// 只往前看 12 小时；打开了没等到关掉的，只算打开那一刻（防止漏报的一次打开把好几个小时都接上）
+async function sessionMinutes(db, ev, ls = {}) {
   if (ev.type !== "app_close") return null;
   const same = ev.app ? "app = ?" : "app IS NULL", args = ev.app ? [ev.app] : [];
   const open = await db.prepare(`SELECT ts FROM events WHERE type = 'app_open' AND ${same} AND ts <= ? ORDER BY ts DESC LIMIT 1`).bind(...args, ev.ts).first();
   if (!open) return null;
   const closed = await db.prepare(`SELECT ts FROM events WHERE type = 'app_close' AND ${same} AND ts > ? AND ts < ? LIMIT 1`).bind(...args, open.ts, ev.ts).first();
   if (closed) return null;
-  return (ev.ts - open.ts) / 60e3;
+  const gap = Number(ls.gap_min) > 0 ? Number(ls.gap_min) * 60e3 : 0;
+  let start = open.ts;
+  const apps = new Set([ev.app || ""]);
+  if (gap) {
+    const want = (ls.apps || []).filter(Boolean), counts = a => !want.length || want.some(w => String(a || "").includes(w));
+    // 查到这次关掉为止：切 App 时「关上一个」可能比「开这一个」晚到几秒，要把它也算进来
+    const rows = (await db.prepare("SELECT ts, type, app FROM events WHERE type IN ('app_open', 'app_close') AND ts >= ? AND ts <= ? ORDER BY ts, id")
+      .bind(ev.ts - 12 * 3600e3, ev.ts).all()).results;
+    const own = ev.app || "", opened = new Map(), spans = [];
+    for (const e of rows) {
+      const k = e.app || "";
+      if (k === own && e.ts >= open.ts) continue;   // 这一次本身已经算在 start 里
+      if (!counts(e.app)) continue;
+      if (e.type === "app_open") { if (opened.has(k)) spans.push([opened.get(k), opened.get(k), k]); opened.set(k, e.ts); }
+      else if (opened.has(k)) { spans.push([opened.get(k), e.ts, k]); opened.delete(k); }
+    }
+    for (const [k, t] of opened) spans.push([t, t, k]);
+    spans.sort((a, b) => b[1] - a[1]);   // 按结束时间从晚到早：接不上一段，更早的也接不上
+    for (const [s, e, k] of spans) {
+      if (e < start - gap) break;
+      if (s < start) start = s;
+      apps.add(k);
+    }
+  }
+  return { min: (ev.ts - start) / 60e3, apps: [...apps].filter(Boolean), since: start };
 }
 
 async function deliver(env, briefing, signal) {
@@ -927,7 +971,8 @@ async function handleEvent(req, env, ectx, received) {
   if (dup) return json({ ok: true, wake: false, skipped: `${dup} 分钟内已经记过一条同样的，这条不记` });
 
   const { state } = await changeState(db, state => ({ state: applyState(ev, state, config) }));
-  const ctx = { config, state, sessionMin: await sessionMinutes(db, ev) };
+  const sess = await sessionMinutes(db, ev, config.long_session);
+  const ctx = { config, state, sessionMin: sess ? sess.min : null, sessionApps: sess ? sess.apps : [], sessionSince: sess ? sess.since : null };
   const hit = evaluate(ev, ctx);
   let result = { ok: true, wake: false };
   if (hit) {
