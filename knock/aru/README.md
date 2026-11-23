@@ -70,6 +70,8 @@ npx wrangler deploy
 }
 ```
 
+`late_night`、`places`、`long_session` 这些带花括号的，保存时是整组换掉的：要改其中一项，整组都写上（没写的会变回默认）。`long_session` 的 `gap_min`（默认 5）和 `once`（默认 true）是 v2.3 加的：关掉一个 App、5 分钟内又开下一个算同一段连着刷，同一段只敲一次；`gap_min` 填 0 就只算单个 App。
+
 `note` 是 AI 用自己的口气写的，会原样放进简报，小模型判断时也最看重它。以后由它通过 MCP 自己改。
 
 ## 小模型

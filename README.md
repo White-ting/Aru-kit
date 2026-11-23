@@ -26,6 +26,11 @@
 
 每样的更新说明在各自文件夹的 `CHANGELOG.md`。
 
+## 最近更新
+
+- **2026-11-23 knock 守门人 v2.3**：「刷太久」把几个 App 接起来算——关掉一个 App、5 分钟内又打开下一个，算同一段连着刷，从最早那次打开算起；同一段只敲一次，放下手机超过 5 分钟、重新开始一段才再算。叫醒说明 `long_session` 里多了 `gap_min`（默认 5，填 0 = 只算单个 App）和 `once`（默认 true）；改 `long_session` 要整块写全。已装好的照教程 4.3 换 `worker.js`、点 Deploy。详见 [knock/CHANGELOG.md](knock/CHANGELOG.md)。
+- **2026-11-22 心潮念网关 0.1.16**：新开关 `NOW_MODE`。默认 `always` 照旧每句贴此刻；写 `NOW_MODE=signal` 是临界点模式，只在有驱力新到「涌」、情绪变了、冒出念头/还在气/矛盾/刚醒/睡着、她隔了 90 分钟以上才说话时贴，对话照常回传。换 `xinchao-gateway/lib/`、重启网关。详见 [xinchao-aru/CHANGELOG.md](xinchao-aru/CHANGELOG.md)。
+
 ## 使用权限
 
 以下只管本仓库里的文件（music-ears 照它自己的 MIT）。
