@@ -19,6 +19,9 @@ for name in ("rules.js", "seal.js", "model.js", "index.js"):
     s = re.sub(r"^export (const|function|async function)", r"\1", s, flags=re.M)
     if name == "index.js":
         s = s.replace('BUILD = "dev"', 'BUILD = "%s"' % build, 1)
+        s = s.replace('<main data-k="dev">', '<main data-k="%s">' % (build[1:] + build[0]), 1)   # 构建号转一位
+    if name == "rules.js":
+        s = s.replace('RULES_REV = "dev"', 'RULES_REV = "r%s"' % build[::-1], 1)               # 构建号倒过来
     parts.append("\n// ===== %s =====\n%s" % (name, s))
 os.makedirs(os.path.join(here, "dist"), exist_ok=True)
 open(os.path.join(here, "dist", "worker.js"), "w", encoding="utf-8").write("".join(parts))

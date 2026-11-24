@@ -273,7 +273,7 @@ check("小模型说叫也要过冷却", /挡下：离上次叫醒/.test(mc[0].ou
 await adminM("/config", "PUT", { cooldown_min: 0, model: { enabled: true, from: 0, to: 23, daily_cap: 1 } });
 clock += 1;
 replies.push({ response: '{"wake": true, "reason": "又到了一个地方"}' });
-await sendM({ type: "leave", place: "公司" });
+await sendM({ type: "arrive", place: "超市" });   // 新地方才问（v2.4：刚到过的公司，离开时不再问）
 mc = await adminM("/checks");
 check("小模型一天的上限", /小模型今天已经叫过 1 次/.test(mc[0].outcome), mc[0].outcome);
 
@@ -478,27 +478,27 @@ const NEW_TYPES = { screenshot: {}, notify: { app: "微信" }, alarm_stop: {}, w
 k = mk();
 let okAll = true;
 for (const [type, extra] of Object.entries(NEW_TYPES)) {
-  x = await k.send({ type, ...extra, t: at("20:00") });
+  x = await k.sendAt("20:00", { type, ...extra });
   if (!(x.status === 200 && x.ok)) { okAll = false; console.log("  没收下：", type, JSON.stringify(x)); }
 }
 check("9 种新小报告都能收", okAll && (await rows(k)).length === 9);
 check("carplay 没带 on 被拒", (await k.send({ type: "carplay" })).status === 400);
-check("carplay 的 on 写中文「是 / 否」也认", (await k.send({ type: "carplay", on: "否", t: at("20:01") })).ok && JSON.parse((await rows(k, "carplay")).at(-1).data).on === false);
+check("carplay 的 on 写中文「是 / 否」也认", (await k.sendAt("20:01", { type: "carplay", on: "否" })).ok && JSON.parse((await rows(k, "carplay")).at(-1).data).on === false);
 check("sound 没带种类被拒", (await k.send({ type: "sound" })).status === 400);
-x = await k.send({ type: "sound", sound: "Doorbell", t: at("20:02") });
+x = await k.sendAt("20:02", { type: "sound", sound: "Doorbell" });
 check("sound 写英文 doorbell 也认，存成「门铃」", JSON.parse((await rows(k, "sound")).at(-1).data).sound === "门铃");
-await k.send({ type: "sound", sound: "敲门声", t: at("20:03") });
+await k.sendAt("20:03", { type: "sound", sound: "敲门声" });
 check("sound 写中文「敲门声」也认，存成「敲门」", JSON.parse((await rows(k, "sound")).at(-1).data).sound === "敲门");
 
 // 多余字段被丢：存之前就没了
 k = mk();
 const SECRET = ["在吗宝贝我想你了", "88.50", "全家便利店", "base64AAAA", "0.93"];
-await k.send({ type: "notify", app: "微信", title: "妈妈", text: SECRET[0], body: SECRET[0], place: "家", t: at("20:00") });
-await k.send({ type: "wallet", card: "地铁卡", amount: SECRET[1], merchant: SECRET[2], app: "钱包", t: at("20:01") });
-await k.send({ type: "sound", sound: "敲门", confidence: SECRET[4], audio: SECRET[3], t: at("20:02") });
-await k.send({ type: "screenshot", image: SECRET[3], app: "相册", t: at("20:03") });
-await k.send({ type: "wifi_join", place: "公司", ssid: "CMCC-5G-XXXX", password: "12345678", t: at("20:04") });
-await k.send({ type: "carplay", on: true, car: "她的车牌", t: at("20:05") });
+await k.sendAt("20:00", { type: "notify", app: "微信", title: "妈妈", text: SECRET[0], body: SECRET[0], place: "家" });
+await k.sendAt("20:01", { type: "wallet", card: "地铁卡", amount: SECRET[1], merchant: SECRET[2], app: "钱包" });
+await k.sendAt("20:02", { type: "sound", sound: "敲门", confidence: SECRET[4], audio: SECRET[3] });
+await k.sendAt("20:03", { type: "screenshot", image: SECRET[3], app: "相册" });
+await k.sendAt("20:04", { type: "wifi_join", place: "公司", ssid: "CMCC-5G-XXXX", password: "12345678" });
+await k.sendAt("20:05", { type: "carplay", on: true, car: "她的车牌" });
 const stored = await rows(k);
 const dump = JSON.stringify(stored);
 check("通知只存 App 名字：标题、正文、多余的 place 都丢了", stored[0].app === "微信" && stored[0].place === null && stored[0].data === "{}", JSON.stringify(stored[0]));
@@ -530,27 +530,27 @@ check("每种小报告写成人话", bad.length === 0, bad.map(([g, w]) => `${g}
 
 // 默认：九种都不叫醒（11-04 Ting 定）
 k = mk();
-x = await k.send({ type: "sound", sound: "敲门", t: at("21:03") });
-const x2 = await k.send({ type: "alarm_stop", t: at("07:12") });
+x = await k.sendAt("21:03", { type: "sound", sound: "敲门" });
+const x2 = await k.sendAt("07:12", { type: "alarm_stop" });
 check("默认九种都不叫醒：敲门、关闹钟也不叫", x.wake === false && x2.wake === false, JSON.stringify([x.wake, x2.wake]));
 
 // 该叫醒的叫醒
 k = await mkOn();
-await k.send({ type: "wifi_join", place: "家", t: at("20:50") });
-await k.send({ type: "screenshot", t: at("20:55") });
-x = await k.send({ type: "sound", sound: "敲门", t: at("21:03") });
+await k.sendAt("20:50", { type: "wifi_join", place: "家" });
+await k.sendAt("20:55", { type: "screenshot" });
+x = await k.sendAt("21:03", { type: "sound", sound: "敲门" });
 check("敲门声叫醒", x.wake === true && x.rule === "report_sound", x.outcome || x.blocked);
 const sb = (await k.env.DB.prepare("SELECT briefing FROM wakes WHERE rule = 'report_sound'").first()).briefing;
 check("敲门的简报：为什么叫你、时间线都是中文", sb.startsWith("〔守门人敲门 · 这次是真的〕") && sb.includes("为什么叫你：21:03 她那边有敲门声")
   && sb.includes("- 20:50 连上了家里的 Wi-Fi") && sb.includes("- 20:55 截了一张屏"), sb.split("\n").slice(1, 2).join(""));
 for (const kind of ["门铃", "警报", "婴儿哭", "火警"]) {
   k = await mkOn();
-  x = await k.send({ type: "sound", sound: kind, t: at("21:03") });
+  x = await k.sendAt("21:03", { type: "sound", sound: kind });
   check(`「${kind}」叫醒`, x.wake === true && x.rule === "report_sound", x.outcome || x.blocked);
 }
 k = await mkOn();
-await k.send({ type: "sleep", t: at("00:30") });
-x = await k.send({ type: "alarm_stop", t: at("07:12") });
+await k.sendAt("00:30", { type: "sleep" });
+x = await k.sendAt("07:12", { type: "alarm_stop" });
 st = await k.admin("/state");
 check("关掉闹钟叫醒，而且算醒了（不再是睡觉状态）", x.wake === true && x.rule === "report_alarm_stop" && st.asleep === false, x.outcome || x.blocked);
 const ab = (await k.env.DB.prepare("SELECT briefing FROM wakes WHERE rule = 'report_alarm_stop'").first()).briefing;
@@ -561,25 +561,25 @@ k = await mkOn();
 let quiet = true;
 for (const [type, extra] of Object.entries({ ...NEW_TYPES, alarm_stop: undefined, sound: { sound: "狗叫" } })) {
   if (!extra) continue;
-  x = await k.send({ type, ...extra, t: at("21:03") });
+  x = await k.sendAt("21:03", { type, ...extra });
   if (x.wake || x.rule) { quiet = false; console.log("  不该叫：", type, JSON.stringify(x)); }
 }
-for (const sd of ["流水", "猫叫", "警笛"]) { x = await k.send({ type: "sound", sound: sd, t: at("21:10") }); if (x.wake || x.rule) quiet = false; }
+for (const sd of ["流水", "猫叫", "警笛"]) { x = await k.sendAt("21:10", { type: "sound", sound: sd }); if (x.wake || x.rule) quiet = false; }
 check("截屏、通知、助眠、Wi-Fi、运动、CarPlay、钱包、狗叫猫叫流水警笛都不叫醒", quiet && (await k.admin("/wakes")).length === 0);
 
 // 硬底线
 k = await mkOn();
-x = await k.send({ type: "sound", sound: "敲门", t: at("02:10") });
+x = await k.sendAt("02:10", { type: "sound", sound: "敲门" });
 check("夜里（1–5 点）敲门：挡下", x.wake === false && /夜里 1–5 点/.test(x.blocked || ""), x.blocked);
-x = await k.send({ type: "alarm_stop", t: at("04:30") });
+x = await k.sendAt("04:30", { type: "alarm_stop" });
 check("凌晨 4:30 关闹钟：也挡下", x.wake === false && /夜里/.test(x.blocked || ""), x.blocked);
 k = await mkOn();
-await k.send({ type: "sleep", t: at("22:00") });
-x = await k.send({ type: "sound", sound: "门铃", t: at("22:30") });
+await k.sendAt("22:00", { type: "sleep" });
+x = await k.sendAt("22:30", { type: "sound", sound: "门铃" });
 check("她在睡觉时门铃：挡下", x.wake === false && /她在睡觉/.test(x.blocked || ""), x.blocked);
 k = await mkOn();
-await k.send({ type: "focus_change", mode: "work", active: true, t: at("14:00") });
-x = await k.send({ type: "sound", sound: "门铃", t: at("14:30") });
+await k.sendAt("14:00", { type: "focus_change", mode: "work", active: true });
+x = await k.sendAt("14:30", { type: "sound", sound: "门铃" });
 check("工作专注模式下门铃：挡下", x.wake === false && /工作专注模式/.test(x.blocked || ""), x.blocked);
 k = await mkOn();
 await k.sendAt("07:00", { type: "alarm_stop" });
@@ -599,15 +599,15 @@ check("默认开关：九种都不叫醒", Object.entries(rc).filter(([, v]) => 
 await k.admin("/config", "PUT", { reports: { alarm_stop: { wake: false }, sound: { wake: false }, notify: { wake: true } } });
 rc = (await k.admin("/config")).reports;
 check("只改了 wake：别的数字照默认补上", rc.sound.wake === false && rc.sound.dedupe_min === 3 && rc.sound.wake_kinds.length === 4 && rc.notify.dedupe_min === 10 && rc.wallet.wake === false);
-x = await k.send({ type: "alarm_stop", t: at("07:12") });
+x = await k.sendAt("07:12", { type: "alarm_stop" });
 check("关掉 alarm_stop.wake：关闹钟不叫", x.wake === false && !x.rule);
-x = await k.send({ type: "sound", sound: "敲门", t: at("07:20") });
+x = await k.sendAt("07:20", { type: "sound", sound: "敲门" });
 check("关掉 sound.wake：敲门也不叫", x.wake === false && !x.rule);
-x = await k.send({ type: "notify", app: "微信", t: at("07:30") });
+x = await k.sendAt("07:30", { type: "notify", app: "微信" });
 check("打开 notify.wake：收到通知就叫（照样过底线）", x.wake === true && x.rule === "report_notify", x.outcome || x.blocked);
 k = mk();
 await k.admin("/config", "PUT", { reports: { night_quiet: false, sound: { wake: true } } });
-x = await k.send({ type: "sound", sound: "警报", t: at("03:00") });
+x = await k.sendAt("03:00", { type: "sound", sound: "警报" });
 check("night_quiet 关掉：夜里警报能叫（冷却、上限还在）", x.wake === true, x.outcome || x.blocked);
 
 // 防刷屏（声音那段要看"跳过的不叫醒"，所以先把声音叫醒打开）
@@ -653,7 +653,7 @@ check("断开 CarPlay：不再写在车上", !/在车上/.test((await k.admin("/
 
 // 原来的种类不受影响：note 照样把字段原样存下
 k = mk();
-await k.send({ type: "note", text: "原来的备注", t: at("20:00") });
+await k.sendAt("20:00", { type: "note", text: "原来的备注" });
 check("原来的种类照旧：note 的字段原样存", (await rows(k, "note"))[0].data === '{"text":"原来的备注"}');
 
 // ---------- v2.2：保存校验、清理、补报、投递失败和并发 ----------
@@ -717,7 +717,7 @@ const late = await k.send({ type: "leave", place: "医院", t: ago(180) });
 const afterLate = await k.admin("/state");
 check("晚到三小时的报告不拨回 last_*，也不改回旧状态", Object.keys(newest).filter(key => key.startsWith("last_")).every(key => newest[key] === afterLate[key])
   && afterLate.focus_mode === "work" && afterLate.asleep === false && afterLate.battery_level === 90 && !afterLate.in_car_at && afterLate.mood === "happy");
-check("补报跨午夜也按收到当天的上限", !late.wake && /上限 1/.test(late.blocked || "") && afterLate.wakes_count === 1);
+check("晚到三小时的补报只记下、不看规则（不叫醒、不占次数）", !late.wake && /只记下，不看规则/.test(late.late || "") && afterLate.wakes_count === 1, JSON.stringify(late));
 check("补报仍用发生时间放入时间线", (await rows(k, "leave"))[0].ts === ago(180));
 await k.send({ type: "note", t: clock + 3600e3 });
 check("未来一小时的 t 改成收到时间", (await rows(k, "note"))[0].ts === clock);
@@ -750,7 +750,7 @@ try {
   check("测试敲门失败不改状态", /失败/.test(failedTest.outcome) && actual === 3 && st.last_fail_ts === anchor && (st.wakes_count || 0) === 0);
   failDelivery = false;
   clock = anchor + 10 * 60e3;
-  x = await k.send({ type: "leave", place: "医院", t: ago(180) });
+  x = await k.send({ type: "leave", place: "医院", t: ago(30) });
   st = await k.admin("/state");
   check("十分钟一到可以重试，成功才计数", x.wake && actual === 4 && st.wakes_count === 1 && st.last_wake_ts === clock
     && !/失败冷却/.test(st["现在"]));
@@ -782,6 +782,119 @@ try {
   const dry = mk({ PUSH_URL: "https://push.example/topic", AI: { async run() { return { response: '{"wake":true,"reason":"只问测试"}' }; } } });
   const asked = await dry.admin("/ask", "POST");
   check("手动问模型即使想叫也不投递", asked.ok && asked.wake && asked.outcome === "只是问问，没敲门" && actual === 2);
+
+  // 11-24 断网补发：同一条发两遍只记一次；时间用快捷指令的 ISO 8601（带 +08:00）
+  const rp = mk();
+  clock = at("17:40", "24");
+  const iso = "2026-11-24T17:29:43+08:00";
+  const r1 = await rp.send({ type: "app_open", app: "小红书", t: iso });
+  const r2 = await rp.send({ type: "app_open", app: "小红书", t: iso });
+  const rows1 = (await rp.env.DB.prepare("SELECT ts FROM events WHERE type = 'app_open'").all()).results;
+  check("ISO 8601 的 t 认得出（按发生时间记）", rows1.length === 1 && rows1[0].ts === Date.parse(iso), JSON.stringify(rows1));
+  check("补发重复的同一条：只记一次，回复写明", r1.ok && !r1.skipped && r2.ok && /补发重复/.test(r2.skipped || ""), JSON.stringify(r2));
+  const r3 = await rp.send({ type: "app_open", app: "抖音", t: iso });
+  check("同一秒、别的 App：照记", r3.ok && !r3.skipped);
+
+  // 11-24 W4：常去的地点不问小模型；定时检查没有新报告就不重问（最多隔 2 小时）
+  let pa = 0;
+  const pl = mk({ AI: { async run() { pa++; return { response: '{"wake": false, "reason": "先不叫"}' }; } } });
+  await pl.admin("/config", "PUT", { model: { enabled: true, from: 0, to: 24, every_min: 30 } });
+  clock = at("08:00", "20");
+  await pl.send({ type: "arrive", place: "公司" });
+  check("第一次到公司：问小模型", pa === 1, String(pa));
+  clock = at("18:00", "20");
+  await pl.send({ type: "leave", place: "公司" });
+  clock = at("08:00", "21");
+  await pl.send({ type: "arrive", place: "公司" });
+  check("7 天内去过的公司：离开、再到都不问", pa === 1, String(pa));
+  clock = at("12:00", "21");
+  await pl.send({ type: "arrive", place: "新开的面馆" });
+  check("没去过的面馆：问", pa === 2, String(pa));
+
+  let ia = 0;
+  const id = mk({ AI: { async run() { ia++; return { response: '{"wake": false, "reason": "先不叫"}' }; } } });
+  await id.admin("/config", "PUT", { model: { enabled: true, from: 0, to: 24, every_min: 30 } });
+  clock = at("10:00", "21");
+  await id.send({ type: "note", text: "随便记一条" });
+  await id.tick(0);
+  check("定时：有报告，问一次", ia === 1, String(ia));
+  clock = at("10:31", "21");
+  await id.tick(0);
+  check("30 分钟后没有新报告：不重问", ia === 1, String(ia));
+  clock = at("11:02", "21");
+  await id.send({ type: "note", text: "又来一条" });
+  await id.tick(0);
+  check("有了新报告：问", ia === 2, String(ia));
+  clock = at("13:10", "21");
+  await id.tick(0);
+  check("两个多小时没新报告：还是问一次", ia === 3, String(ia));
+
+  // 11-24 W6：建过表的库在 kv 记 schema_v；Worker 被回收、换新连接时只查这一下，不再跑建表
+  const sc = mk();
+  await sc.admin("/state");
+  const scv = await sc.env.DB.prepare("SELECT v FROM kv WHERE k = 'schema_v'").first();
+  check("建完表记下 schema_v", scv && scv.v === "2.4", JSON.stringify(scv));
+  let ddl = 0;
+  const realDb = sc.env.DB;
+  const proxyDb = { prepare: q => { if (/CREATE|ALTER/.test(q)) ddl++; return realDb.prepare(q); }, batch: a => { ddl += a.length; return realDb.batch(a); } };
+  const scr = await worker.fetch(new Request(base + "/state", { headers: { authorization: "Bearer " + sc.env.ADMIN_TOKEN } }), { ...sc.env, DB: proxyDb });
+  check("换了新连接：不再跑建表语句", scr.status === 200 && ddl === 0, "跑了 " + ddl + " 条");
+
+  // 11-24 Muse 评审：晚到 1 小时以上的补报只记不看规则；睡着/专注漏报会过期；刷太久的 App 名单看整段
+  const lt = mk();
+  clock = at("09:00", "21");
+  const lateOpen = await lt.send({ type: "app_open", app: "抖音", t: clock - 7 * 3600e3 });   // 凌晨 2 点的打开，早上 9 点才补来
+  check("早上补来凌晨 2 点的打开：不按熬夜规则敲门，只记下", !lateOpen.wake && !lateOpen.rule && /只记下/.test(lateOpen.late || "") && (await lt.admin("/wakes")).length === 0, JSON.stringify(lateOpen));
+  const lt2 = await lt.send({ type: "app_open", app: "抖音", t: clock - 50 * 60e3 });
+  check("晚到 50 分钟的照常看规则（门槛是 1 小时）", !lt2.late, JSON.stringify(lt2));
+
+  const sl = mk();
+  clock = at("23:00", "21");
+  await sl.send({ type: "sleep" });
+  clock = at("08:00", "22");
+  await sl.send({ type: "app_open", app: "微信" });
+  check("睡了 9 小时又开 App：还当在睡（没到 12 小时）", (await sl.admin("/state")).asleep === true);
+  clock = at("11:30", "22");
+  await sl.send({ type: "app_open", app: "微信" });
+  let sls = await sl.admin("/state");
+  check("起床那条漏了，睡着超过 12 小时又用手机：当醒了", sls.asleep === false && /当醒了/.test(sls.stale_cleared || ""), JSON.stringify(sls.stale_cleared));
+  await sl.admin("/config", "PUT", { places: { watch: ["医院"] } });
+  const slw = await sl.send({ type: "arrive", place: "医院" });
+  check("当醒了以后规则照常敲门", slw.wake === true && slw.rule === "place", slw.blocked || slw.outcome);
+
+  const fo = mk();
+  clock = at("09:00", "21");
+  await fo.send({ type: "focus_change", mode: "work", active: true });
+  clock = at("20:00", "21");
+  await fo.send({ type: "app_open", app: "微信" });
+  check("工作模式开了 11 小时：还算在工作", (await fo.admin("/state")).focus_mode === "work");
+  clock = at("23:30", "21");
+  await fo.send({ type: "app_open", app: "微信" });
+  const fos = await fo.admin("/state");
+  check("工作模式开了超过 14 小时又用手机：当关了，也不补一次下班", fos.focus_mode == null && !fos.pending_work_end_at && /当已经关了/.test(fos.stale_cleared || ""), JSON.stringify(fos));
+
+  const wl = mk();
+  await wl.admin("/config", "PUT", { long_session: { enabled: true, minutes: 40, apps: ["小红书"], gap_min: 5, once: true } });
+  clock = at("15:00", "21");
+  await wl.send({ type: "app_open", app: "小红书" });
+  clock = at("15:30", "21");
+  await wl.send({ type: "app_close", app: "小红书" });
+  clock = at("15:31", "21");
+  await wl.send({ type: "app_open", app: "抖音" });
+  clock = at("15:45", "21");
+  const wlr = await wl.send({ type: "app_close", app: "抖音" });
+  check("刷太久只看小红书时：小红书接抖音一段 45 分钟，最后关的是抖音也敲", wlr.wake === true && wlr.rule === "long_session", JSON.stringify(wlr));
+
+  // 11-24 水印：/state 带修订号，管理页带署名和 data-k，回复头带 x-knock
+  const wm = mk();
+  const wmState = await wm.admin("/state");
+  const wantRev = process.env.WANT_REV || "dev";
+  check("水印：/state 带修订号 rev", wmState.rev === wantRev);
+  const pg = await wm.raw("/", "GET");
+  const html = await pg.text();
+  const wantK = process.env.WANT_K || "dev";
+  check("水印：管理页有 White-ting、原版地址和 data-k", html.includes("White-ting") && html.includes("github.com/White-ting/Aru-kit") && html.includes(`<main data-k="${wantK}">`));
+  check("水印：回复头 x-knock 带 White-ting", (pg.headers.get("x-knock") || "").includes("White-ting"));
 } finally {
   globalThis.fetch = realFetch;
   Date.now = realNow;

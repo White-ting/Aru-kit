@@ -1,13 +1,16 @@
+// knock 守门人 · White-ting · 原版 github.com/White-ting/Aru-kit（不许转发、不许商用）
 // knock · aru：守门人 Worker（最小版）
 // 快捷指令 POST /event → 存时间线 → 规则 → 硬底线 → 叫醒（Aru 外部触发；没配就推送；都没配只记下）
 // 规则没碰到的，交给小模型看一眼（定时、或者事件"差一点"碰到规则时），它说叫也照样要过硬底线
-import { mergeConfig, validateConfig, evaluate, guard, afterWake, applyState, buildBriefing, nearMiss, daySummary, describe, localParts,
+import { mergeConfig, RULES_REV, validateConfig, evaluate, guard, afterWake, applyState, buildBriefing, nearMiss, daySummary, describe, localParts,
   statusLine, quietReason, failureReason, confirmWorkEnd, checkInactivity, REPORT_FIELDS } from "./rules.js";
 import { submitWakeEvent } from "./seal.js";
 import { buildMessages, parseDecision, askModel } from "./model.js";
 
 // 版本和署名（11-01 起）：管理页底部、每个回复的 x-knock 头都带着。BUILD 是构建号，打包时按拿到的人换掉
-export const VERSION = "2.3.1", RELEASED = "2026-11-23", BUILD = "dev";
+export const VERSION = "2.4", RELEASED = "2026-11-24", BUILD = "dev";
+const KNOWN_PLACE_DAYS = 7, IDLE_REASK_H = 2;   // 常去地点看几天；没新报告时定时检查最多隔几小时再问
+const LATE_MIN = 60;   // 晚到多久的事件只记不看规则（见 handleEvent）
 const SIGN = `knock 守门人 v${VERSION}（${RELEASED}）· White-ting · 构建 ${BUILD}`;
 const SIGN_HDR = `knock v${VERSION} ${RELEASED} White-ting ${BUILD}`;
 
@@ -40,8 +43,14 @@ const WAKE_LEASE_MS = 60e3;
 
 // 表第一次用时自己建（网页后台部署时不用另外跑 schema.sql）
 const schemaReady = new WeakSet();
+const SCHEMA_V = "2.4";   // 表结构变了就改这里，各份 Worker 会再跑一遍建表
 async function ensureSchema(db) {
   if (schemaReady.has(db)) return;
+  // 11-24：Worker 常被回收，WeakSet 留不住；在 kv 里记一笔，建过的只查这一下，不用每次跑一串建表
+  try {
+    const v = await db.prepare("SELECT v FROM kv WHERE k = 'schema_v'").first();
+    if (v && v.v === SCHEMA_V) { schemaReady.add(db); return; }
+  } catch { /* 还没有 kv 表：往下建 */ }
   await db.batch(SCHEMA.split(";").map(x => x.trim()).filter(Boolean).map(x => db.prepare(x)));
   // 老数据库没有收到时间。两份 Worker 同时升级时，有一份先加好也算成功。
   const hasReceived = async () => ((await db.prepare("PRAGMA table_info(events)").all()).results || []).some(c => c.name === "received_ts");
@@ -49,6 +58,7 @@ async function ensureSchema(db) {
     try { await db.prepare("ALTER TABLE events ADD COLUMN received_ts INTEGER").run(); }
     catch (e) { if (!(await hasReceived())) throw e; }
   }
+  await db.prepare("INSERT INTO kv (k, v) VALUES ('schema_v', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(SCHEMA_V).run();
   schemaReady.add(db);
 }
 const SCHEMA = `
@@ -146,6 +156,10 @@ function parseReport(type, ts, body) {
 
 // 防刷屏和写入放在同一句 SQL。旧记录没有收到时间，升级时用发生时间作短暂兼容。
 async function storeEvent(db, ev, config, received) {
+  // 11-24：断网补发时同一条可能发两遍（两条自动化同时补发）——时间、类型、App、地点、内容都一样的只记一次
+  const same = await db.prepare("SELECT 1 AS x FROM events WHERE ts = ? AND type = ? AND app IS ? AND place IS ? AND data = ? LIMIT 1")
+    .bind(ev.ts, ev.type, ev.app, ev.place, JSON.stringify(ev.data)).first();
+  if (same) return "same";
   const rc = REPORT_FIELDS[ev.type] && (config.reports || {})[ev.type], min = Number(rc && rc.dedupe_min);
   const args = [ev.ts, ev.type, ev.app, ev.place, JSON.stringify(ev.data), received];
   let sql = "INSERT INTO events (ts, type, app, place, data, received_ts) SELECT ?, ?, ?, ?, ?, ?";
@@ -246,8 +260,11 @@ async function tryWake(env, hit, ev, config, now) {
     // 手动「测试敲门」不受失败冷却、不改状态：刚搭好时常要改完配置马上再试（11-19 枢复审改）
     const blocked = !test && (failureReason(state, now) || guard(hit, ev, { config, state, now }));
     if (blocked) return await denied(blocked);
-    const timeline = test ? [] : await eventsSince(db, ev.ts - TIMELINE_HOURS * 3600e3);
-    const summary = test ? "" : daySummary(await eventsSince(db, dayStart(ev.ts, config.tz)), config.tz);
+    // 11-24：时间线（最近几小时）和今天的摘要一次查出来再分，不查两遍
+    const tlFrom = ev.ts - TIMELINE_HOURS * 3600e3, dayFrom = dayStart(ev.ts, config.tz);
+    const evs = test ? [] : await eventsSince(db, Math.min(tlFrom, dayFrom));
+    const timeline = evs.filter(e => e.ts >= tlFrom);
+    const summary = test ? "" : daySummary(evs.filter(e => e.ts >= dayFrom), config.tz);
     const briefing = buildBriefing({ hit, ev, config, timeline, summary, status: test ? "" : statusLine(state, now, config) });
     // 网络请求最多等 25 秒，也给租约留出写记录、写状态的时间。
     const budget = Math.min(25e3, until - Date.now() - 10e3);
@@ -277,8 +294,10 @@ async function tryWake(env, hit, ev, config, now) {
 async function modelCheck(env, trigger, { dry = false, now = Date.now() } = {}) {
   const db = env.DB;
   const config = mergeConfig(await kvGet(db, "config", null));
-  const today = await eventsSince(db, dayStart(now, config.tz));
-  const recent = (await eventsSince(db, now - 2 * 3600e3)).map(e => describe(e, config.tz));
+  const dayFrom = dayStart(now, config.tz), recentFrom = now - 2 * 3600e3;
+  const evs = await eventsSince(db, Math.min(dayFrom, recentFrom));   // 11-24：一次查出来再分
+  const today = evs.filter(e => e.ts >= dayFrom);
+  const recent = evs.filter(e => e.ts >= recentFrom).map(e => describe(e, config.tz));
   const last = await db.prepare(`SELECT ts, reason FROM wakes WHERE outcome NOT LIKE '挡下%' AND outcome NOT LIKE '失败%'
     AND rule != 'test' ORDER BY ts DESC LIMIT 1`).first();
   const messages = buildMessages({
@@ -343,11 +362,19 @@ async function handleEvent(req, env, ectx, received) {
   const db = env.DB;
   const config = mergeConfig(await kvGet(db, "config", null));
   const dup = await storeEvent(db, ev, config, received);
+  if (dup === "same") return json({ ok: true, wake: false, skipped: "这条已经记过了（补发重复的），不再记" });
   if (dup) return json({ ok: true, wake: false, skipped: `${dup} 分钟内已经记过一条同样的，这条不记` });
 
   const { state } = await changeState(db, state => ({ state: applyState(ev, state, config) }));
   const sess = await sessionMinutes(db, ev, config.long_session);
   const ctx = { config, state, sessionMin: sess ? sess.min : null, sessionApps: sess ? sess.apps : [], sessionSince: sess ? sess.since : null };
+  if ((ev.type === "arrive" || ev.type === "leave") && ev.place)   // 常去的地点：差一点时不问小模型（见 nearMiss）
+    ctx.placeKnown = !!(await db.prepare("SELECT 1 AS x FROM events WHERE type IN ('arrive', 'leave') AND place = ? AND ts < ? AND ts >= ? LIMIT 1")
+      .bind(ev.place, ev.ts, ev.ts - KNOWN_PLACE_DAYS * 86400e3).first());
+  // 11-24：晚到超过 LATE_MIN 分钟的补报（比如断网攒了一夜），只记时间线、改状态，不按当时的时间去看规则——
+  // 不然早上 9 点补来一条凌晨 2 点的「打开 App」，会照熬夜规则敲门
+  const late = received - ev.ts > LATE_MIN * 60e3;
+  if (late) return json({ ok: true, wake: false, late: `晚到 ${Math.round((received - ev.ts) / 60e3)} 分钟的补报，只记下，不看规则` });
   const hit = evaluate(ev, ctx);
   let result = { ok: true, wake: false };
   if (hit) {
@@ -402,7 +429,7 @@ export default {
     }
     if (p === "/state") {
       const state = await kvGet(db, "state", {}), config = mergeConfig(await kvGet(db, "config", null));
-      return json({ 现在: statusLine(state, Date.now(), config) || "没有特别的状态", ...state });
+      return json({ 现在: statusLine(state, Date.now(), config) || "没有特别的状态", ...state, rev: RULES_REV });
     }
     if (p === "/checks") {
       const rows = (await db.prepare("SELECT ts, trigger, wake, reason, outcome FROM checks ORDER BY ts DESC, id DESC LIMIT 40").all()).results;
@@ -431,6 +458,9 @@ export default {
     if (state.asleep || quietReason(state, now, config.tz) || !(m.from <= m.to ? h >= m.from && h < m.to : h >= m.from || h < m.to)) return;
     const lastAsk = await kvGet(db, "model_last", 0);
     if (now - lastAsk < (m.every_min - 2) * 60e3) return;   // Cron 比 every_min 勤的话跳过几次
+    // 11-24：上次问过以后一条新报告都没有，就别拿同样的东西再问一遍；最多隔 IDLE_REASK_H 小时还是问一次
+    const newest = await db.prepare("SELECT MAX(ts) AS t FROM events").first();
+    if (lastAsk && !(newest && newest.t > lastAsk) && now - lastAsk < IDLE_REASK_H * 3600e3) return;
     await kvPut(db, "model_last", now);
     const job = modelCheck(env, "定时看一眼", { now: received });
     if (ectx && ectx.waitUntil) ectx.waitUntil(job); else await job;
@@ -448,7 +478,7 @@ section{background:var(--card);border-radius:16px;padding:16px;margin:0 0 14px;b
 h2{font-size:16px;margin:0 0 8px}textarea{width:100%;box-sizing:border-box;min-height:260px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;background:transparent;color:var(--ink);border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:10px}
 button{font:inherit;border:0;border-radius:10px;padding:9px 16px;background:var(--acc);color:#fff;cursor:pointer;margin-right:8px}button.g{background:rgba(128,128,128,.18);color:var(--ink)}
 .row{font-size:13px;padding:6px 0;border-top:1px solid rgba(128,128,128,.15)}.row:first-child{border:0}.d{color:var(--dim)}#msg{min-height:1.4em;color:var(--acc);margin-top:8px}
-</style></head><body><main>
+</style></head><body><main data-k="dev">
 <h1>knock 守门人</h1><p class="s">快捷指令报来的事，按这里的规则判断要不要敲门叫醒 Aru 里的 TA。</p>
 <p id="legacy" hidden>以后改用 #key=，?key= 会留在浏览器记录里。</p>
 <section id="login" hidden><form id="loginform"><label for="key">粘贴管理口令</label> <input id="key" type="password" autocomplete="off" required> <button>打开管理页</button></form><div id="loginmsg" role="status"></div></section>

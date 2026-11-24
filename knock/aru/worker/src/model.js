@@ -1,3 +1,4 @@
+// knock 守门人 · White-ting · 原版 github.com/White-ting/Aru-kit（不许转发、不许商用）
 // 看门的小模型：规则管不到的时候，替 TA 看一眼"这时候 TA 会不会想找她"。
 // 只回 {wake, reason}：不跟她说话、不自己发消息；叫不叫最后还要过硬底线。
 // 默认用 Cloudflare 自己的 Workers AI（绑定名 AI，数据不出 Cloudflare）；

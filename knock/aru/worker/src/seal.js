@@ -1,3 +1,4 @@
+// knock 守门人 · White-ting · 原版 github.com/White-ting/Aru-kit（不许转发、不许商用）
 // 照 aru-host 的 wake-send.mjs（Apache-2.0）用 WebCrypto 重写：把简报封进 Aru 外部触发的信封，投给 Host。
 // bundle 是手机导出的发送凭证：{schema, triggerId, submitURL, submitToken, encryptionKey(base64, 32 字节)}
 

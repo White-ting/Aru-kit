@@ -52,7 +52,7 @@ npx wrangler deploy
 
 都可以带 `t`（时间，ISO 格式），不带就用收到的时间。别的字段原样记下，会出现在简报里。
 
-快捷指令做法：自动化 → 选触发 → 立即运行 → 动作「获取 URL 内容」：地址 `https://你的worker/event`，方法 POST，头部加 `Authorization`，请求体选 JSON，填 `type`、`app`（用快捷指令变量）等。
+快捷指令做法（v2.4 起，详见教程第 6 步）：先建共用快捷指令「knock上报」——给收到的字典加上 `t`（当前时间，ISO 8601）、存一份到 `Shortcuts/knock排队/`、POST 到 `https://你的worker/event`（头部 `Authorization: Bearer 事件口令`，请求体「文件 = 字典」，发出去就是 JSON）、发成功删掉那一份；「knock补发」把 knock排队 里留下的逐个补发再删，挂在一条自动化上（触发：连上任何 Wi-Fi，或连接电源）。每条自动化只放「字典（`type`、`app` 等，直接打字）+ 运行快捷指令 knock上报」。完全相同的报告守门人只记一次，所以补发重复了也没关系。
 
 ## 叫醒说明
 

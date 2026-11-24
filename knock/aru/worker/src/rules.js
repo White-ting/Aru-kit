@@ -1,5 +1,8 @@
+// knock 守门人 · White-ting · 原版 github.com/White-ting/Aru-kit（不许转发、不许商用）
 // 守门人的规则：纯函数，不碰网络和数据库，方便单独测。
 // 规则是我们自己写的；"叫醒说明"(config) 是 AI 用自己的口气写、能自己改的那份参数。
+
+export const RULES_REV = "dev";   // 规则这一版的修订号，/state 里会带着
 
 export const DEFAULT_CONFIG = {
   tz: "Asia/Shanghai",
@@ -123,11 +126,16 @@ export function mergeConfig(saved) {
 function structuredCloneSafe(o) { return JSON.parse(JSON.stringify(o)); }
 
 // 某个时刻在她时区里是几点、哪一天
+const FMT = new Map();   // 11-24：按时区缓存格式化器，摘要、时间线逐条调用时不用每次新建
 export function localParts(ts, tz) {
-  const f = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
+  let f = FMT.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    FMT.set(tz, f);
+  }
   const p = Object.fromEntries(f.formatToParts(new Date(ts)).map(x => [x.type, x.value]));
   const hour = Number(p.hour) % 24;
   return { date: `${p.year}-${p.month}-${p.day}`, hour, minute: Number(p.minute), hm: `${String(hour).padStart(2, "0")}:${p.minute}` };
@@ -171,7 +179,7 @@ export function evaluate(ev, ctx) {
   }
   if (ev.type === "app_close" && c.long_session.enabled && ctx.sessionMin != null && !stretchDone(ctx)) {
     const apps = c.long_session.apps || [];
-    if (ctx.sessionMin >= c.long_session.minutes && (!apps.length || apps.some(a => String(ev.app || "").includes(a)))) {
+    if (ctx.sessionMin >= c.long_session.minutes && (!apps.length || (ctx.sessionApps && ctx.sessionApps.length ? ctx.sessionApps : [ev.app || ""]).some(x => apps.some(a => String(x).includes(a))))) {
       return { rule: "long_session", since: ctx.sessionSince, reason: `${sessionWhere(ev, ctx)}${Math.round(ctx.sessionMin)} 分钟（到 ${t.hm}）` };
     }
   }
@@ -198,7 +206,8 @@ export function nearMiss(ev, ctx) {
   if (ev.type === "app_open" && c.late_night.enabled && inHours(t.hour, (c.late_night.from + 23) % 24, c.late_night.from)) {
     return `${t.hm} 还在用「${ev.app || "手机"}」（熬夜规则从 ${c.late_night.from} 点算）`;
   }
-  if ((ev.type === "arrive" || ev.type === "leave") && ev.place) {
+  // 11-24：7 天内到过/离开过的地点（家、公司这种天天去的）不再每次问小模型，第一次去的地方才问
+  if ((ev.type === "arrive" || ev.type === "leave") && ev.place && !ctx.placeKnown) {
     return `${ev.type === "arrive" ? "到了" : "离开了"}「${ev.place}」（不在关注的地点里）`;
   }
   return null;
@@ -291,6 +300,7 @@ export function afterWake(hit, ev, ctx) {
 // 算"她在用手机"的事件：没动静检测只认这些。充电、电量、专注模式、备注、健康数据可能是自动化自己跑的，不算；
 // 心情是她手动点的菜单，算
 // 小报告里截屏、关闹钟、刷卡是她亲手做的，也算；通知、声音、Wi-Fi、CarPlay、助眠、运动可能是自己发生的，不算
+export const STALE_SLEEP_H = 12, STALE_FOCUS_H = 14;   // 睡着、工作/勿扰多久没关就当漏报了（见 applyState）
 const ACTIVITY = new Set(["app_open", "app_close", "arrive", "leave", "wake_up", "mood", "screenshot", "alarm_stop", "wallet"]);
 
 // 事件改状态（不叫醒）。每种状态按自己的发生时间排序，迟到的报告只补时间线。
@@ -303,6 +313,19 @@ export function applyState(ev, state, config) {
   if (ACTIVITY.has(ev.type) && fresh("last_activity_ts")) {
     s.last_activity_ts = ev.ts;
     delete s.inactivity_pending_since;
+  }
+  // 11-24：起床、关专注模式那条漏报一次，状态会一直卡着（一整天当她在睡觉、在工作，几乎不敲）。
+  // 睡着超过 STALE_SLEEP_H、开着工作/勿扰超过 STALE_FOCUS_H，又有她自己动手机的动静，就当已经醒了/关了。
+  if (ACTIVITY.has(ev.type)) {
+    if (s.asleep && s.sleep_at != null && ev.ts - s.sleep_at > STALE_SLEEP_H * 3600e3) {
+      s.asleep = false; s.sleep_at = ev.ts; s.stale_cleared = `${localParts(ev.ts, c.tz).hm} 睡着已经超过 ${STALE_SLEEP_H} 小时、又在用手机，当醒了`;
+      if (s.focus_mode === "sleep") s.focus_mode = null;
+    }
+    if ((s.focus_mode === "work" || s.focus_mode === "dnd") && s.focus_at != null && ev.ts - s.focus_at > STALE_FOCUS_H * 3600e3) {
+      s.stale_cleared = `${localParts(ev.ts, c.tz).hm}「${FOCUS_ZH[s.focus_mode]}」开了超过 ${STALE_FOCUS_H} 小时，当已经关了`;
+      s.focus_mode = null; s.focus_at = ev.ts;
+      delete s.work_started_at; delete s.pending_work_end_at;   // 不当成下班，免得补出一次「下班了」
+    }
   }
   if (ev.type === "sleep") sleep(true);
   if (ev.type === "wake_up" || ev.type === "alarm_stop") sleep(false);   // 关掉闹钟 = 醒了
